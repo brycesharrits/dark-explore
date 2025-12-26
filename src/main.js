@@ -1,5 +1,7 @@
 import { Game } from "phaser";
 import { Preloader } from "./preloader";
+import { CaveScene } from "./scenes/CaveScene";
+import { CaveHudScene } from "./scenes/CaveHudScene";
 import { GameOverScene } from "./scenes/GameOverScene";
 import { HudScene } from "./scenes/HudScene";
 import { MainScene } from "./scenes/MainScene";
@@ -31,6 +33,8 @@ const config = {
     },
     scene: [
         Preloader,
+        CaveScene,
+        CaveHudScene,
         SplashScene,
         MainScene,
         MenuScene,

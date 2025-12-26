@@ -6,6 +6,8 @@ export class Preloader extends Phaser.Scene {
     }
 
     preload() {
+        console.log('[Preloader] preload() called');
+
         // Load all the assets
         this.load.setPath("assets");
         this.load.image("logo", "logo.png");
@@ -36,6 +38,8 @@ export class Preloader extends Phaser.Scene {
     }
 
     create() {
+        console.log('[Preloader] create() called');
+
         // Create bitmap font and load it in cache
         const config = {
             image: 'knighthawks',
@@ -48,6 +52,7 @@ export class Preloader extends Phaser.Scene {
         this.cache.bitmapFont.add('knighthawks', Phaser.GameObjects.RetroFont.Parse(this, config));
 
         // When all the assets are loaded go to the next scene
-        this.scene.start("SplashScene");
+        console.log('[Preloader] Starting CaveScene...');
+        this.scene.start("CaveScene");
     }
 }
