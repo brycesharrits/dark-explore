@@ -12,8 +12,14 @@ export class CaveScene extends Scene {
         this.maxOil = 100; // Maximum oil capacity
         this.currentOil = 100; // Current oil level (starts full)
         this.oilDepletionRate = 2; // Oil units consumed per second
-        this.maxLightRadius = 120; // Maximum light radius in pixels
-        this.minLightRadius = 20; // Minimum light radius before game over
+        this.maxLightRadius = 240; // Maximum light radius in pixels
+        this.minLightRadius = 20; // Minimum light radius before game over (legacy - used for calculations)
+        this.minRadiusBeforeDim = 80; // Minimum radius before dimming starts (circle stops shrinking here)
+        this.maxLightIntensity = 1.5; // Maximum light intensity
+
+        // Oil pickup properties
+        this.numOilPickups = 5; // Number of oil pickups to spawn
+        this.oilPickupAmount = 25; // Amount of oil restored per pickup
     }
 
     create() {
@@ -40,6 +46,10 @@ export class CaveScene extends Scene {
         // Create the lantern/visibility system
         console.log('[CaveScene] Creating lantern system...');
         this.createLanternSystem(worldWidth, worldHeight);
+
+        // Create oil pickups
+        console.log('[CaveScene] Creating oil pickups...');
+        this.createOilPickups(worldWidth, worldHeight);
 
         // Launch the HUD scene
         console.log('[CaveScene] Launching HUD scene...');
@@ -131,22 +141,99 @@ export class CaveScene extends Scene {
         console.log('=== LANTERN SETUP COMPLETE ===\n');
     }
 
+    createOilPickups(worldWidth, worldHeight) {
+        console.log('[OIL PICKUPS] Creating oil pickup group...');
+
+        // Create a physics group for oil pickups
+        this.oilPickups = this.physics.add.group();
+
+        // Spawn oil pickups at random locations
+        for (let i = 0; i < this.numOilPickups; i++) {
+            // Generate random position within world bounds, with some padding
+            const padding = this.tileSize * 2;
+            const x = Phaser.Math.Between(padding, worldWidth - padding);
+            const y = Phaser.Math.Between(padding, worldHeight - padding);
+
+            // Create a graphics object for the oil pickup (small red circle)
+            const graphics = this.make.graphics({ x: 0, y: 0, add: false });
+            graphics.fillStyle(0xff6600, 1); // Orange color for oil
+            graphics.fillCircle(8, 8, 6); // Small circle with radius 6
+
+            // Generate a unique texture for this pickup
+            const textureName = `oil-pickup-${i}`;
+            graphics.generateTexture(textureName, 16, 16);
+            graphics.destroy();
+
+            // Create the oil pickup sprite
+            const oilPickup = this.physics.add.sprite(x, y, textureName);
+            oilPickup.setPipeline('Light2D'); // Enable lighting on the pickup
+
+            // Add to the group
+            this.oilPickups.add(oilPickup);
+
+            console.log(`[OIL PICKUPS] Spawned pickup ${i + 1} at (${x}, ${y})`);
+        }
+
+        // Set up collision detection with player
+        this.physics.add.overlap(
+            this.player,
+            this.oilPickups,
+            this.collectOilPickup,
+            null,
+            this
+        );
+
+        console.log(`[OIL PICKUPS] Created ${this.numOilPickups} oil pickups with collision detection`);
+    }
+
+    collectOilPickup(player, oilPickup) {
+        console.log('[OIL PICKUPS] Collecting oil pickup!');
+
+        // Add oil to the player's lantern
+        this.addOil(this.oilPickupAmount);
+
+        // Remove the pickup from the scene
+        oilPickup.destroy();
+
+        console.log(`[OIL PICKUPS] Added ${this.oilPickupAmount} oil. Current oil: ${this.currentOil}/${this.maxOil}`);
+    }
+
     updateLightMask() {
         if (!this.updateLightMaskCount) this.updateLightMaskCount = 0;
         this.updateLightMaskCount++;
 
-        // Calculate current light radius based on oil level
-        const oilPercent = this.currentOil / this.maxOil;
-        const currentRadius = this.minLightRadius + (this.maxLightRadius - this.minLightRadius) * oilPercent;
+        const currentOilPercent = this.currentOil / this.maxOil;
 
-        // Update lantern light position and radius
+        // Calculate the oil percentage threshold where minimum radius is reached
+        // This is where the circle stops shrinking and dimming begins
+        const oilThresholdPercent = (this.minRadiusBeforeDim - this.minLightRadius) / (this.maxLightRadius - this.minLightRadius);
+
+        let currentRadius;
+        let currentIntensity;
+
+        if (currentOilPercent > oilThresholdPercent) {
+            // Phase 1: Above threshold - shrink radius normally, keep intensity at max
+            currentRadius = this.minLightRadius + (this.maxLightRadius - this.minLightRadius) * currentOilPercent;
+            currentIntensity = this.maxLightIntensity;
+        } else {
+            // Phase 2: Below threshold - keep radius at minimum, dim intensity
+            currentRadius = this.minRadiusBeforeDim;
+            // Calculate dim progress: 1.0 at threshold, 0.0 at empty
+            const dimProgress = currentOilPercent / oilThresholdPercent;
+            currentIntensity = this.maxLightIntensity * dimProgress;
+        }
+
+        // Update lantern light position, radius, and intensity
         this.lanternLight.setPosition(this.player.x, this.player.y);
         this.lanternLight.setRadius(currentRadius);
+        this.lanternLight.setIntensity(currentIntensity);
 
         if (this.updateLightMaskCount <= 3) {
             console.log('=== UPDATE LIGHT #' + this.updateLightMaskCount + ' ===');
-            console.log('[LIGHT] Oil:', this.currentOil.toFixed(1) + '/' + this.maxOil, '(' + (oilPercent * 100).toFixed(1) + '%)');
+            console.log('[LIGHT] Oil:', this.currentOil.toFixed(1) + '/' + this.maxOil, '(' + (currentOilPercent * 100).toFixed(1) + '%)');
+            console.log('[LIGHT] Threshold:', (oilThresholdPercent * 100).toFixed(1) + '%');
             console.log('[LIGHT] Radius:', currentRadius.toFixed(1), 'px');
+            console.log('[LIGHT] Intensity:', currentIntensity.toFixed(2));
             console.log('[LIGHT] Light position:', this.player.x.toFixed(1), this.player.y.toFixed(1));
             console.log('=== END UPDATE #' + this.updateLightMaskCount + ' ===\n');
         }
