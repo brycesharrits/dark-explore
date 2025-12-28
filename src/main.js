@@ -18,8 +18,8 @@ const config = {
     pixelArt: true,
     roundPixel: false,
     max: {
-        width: 800,
-        height: 600,
+        width: 1000, //800 originaly
+        height: 1000, //600 originaly
     },
     scale: {
         mode: Phaser.Scale.FIT,

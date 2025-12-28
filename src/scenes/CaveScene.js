@@ -2,16 +2,25 @@ import { Scene } from 'phaser';
 import { CavePlayer } from '../gameobjects/CavePlayer';
 
 export class CaveScene extends Scene {
+    // Static variable to store high score across game sessions (for the current browser session)
+    static sessionHighScore = 0;
+
     constructor() {
         super({ key: 'CaveScene' });
         this.tileSize = 32; // Size of each tile in pixels
         this.gridWidth = 30; // Number of tiles wide
         this.gridHeight = 30; // Number of tiles tall
 
+        // Game state
+        this.gameStarted = false; // Track if game has started
+        this.gameOver = false; // Track if game is over
+        this.score = 0; // Current score
+        this.scoreTimer = 0; // Timer for score increments
+
         // Lantern system properties
         this.maxOil = 100; // Maximum oil capacity
         this.currentOil = 100; // Current oil level (starts full)
-        this.oilDepletionRate = 2; // Oil units consumed per second
+        this.oilDepletionRate = 10; // Oil units consumed per second - 2 is default
         this.maxLightRadius = 240; // Maximum light radius in pixels
         this.minLightRadius = 20; // Minimum light radius before game over (legacy - used for calculations)
         this.minRadiusBeforeDim = 80; // Minimum radius before dimming starts (circle stops shrinking here)
@@ -24,6 +33,13 @@ export class CaveScene extends Scene {
 
     create() {
         console.log('[CaveScene] create() called');
+
+        // Reset game state (important for scene restart)
+        this.gameStarted = false;
+        this.gameOver = false;
+        this.currentOil = this.maxOil;
+        this.score = 0;
+        this.scoreTimer = 0;
 
         // Set world bounds based on grid size
         const worldWidth = this.gridWidth * this.tileSize;
@@ -51,10 +67,6 @@ export class CaveScene extends Scene {
         console.log('[CaveScene] Creating oil pickups...');
         this.createOilPickups(worldWidth, worldHeight);
 
-        // Launch the HUD scene
-        console.log('[CaveScene] Launching HUD scene...');
-        this.scene.launch('CaveHudScene');
-
         // Configure camera to follow player
         console.log('[CaveScene] Configuring camera...');
         this.cameras.main.setBounds(0, 0, worldWidth, worldHeight);
@@ -69,6 +81,35 @@ export class CaveScene extends Scene {
             down: Phaser.Input.Keyboard.KeyCodes.S,
             left: Phaser.Input.Keyboard.KeyCodes.A,
             right: Phaser.Input.Keyboard.KeyCodes.D
+        });
+        this.spaceKey = this.input.keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.SPACE);
+
+        // Create start screen text
+        console.log('[CaveScene] Creating start screen text...');
+        this.startText = this.add.text(
+            20,
+            20,
+            'Use arrow keys to begin',
+            {
+                fontSize: '24px',
+                color: '#ffffff',
+                fontStyle: 'bold',
+                stroke: '#000000',
+                strokeThickness: 4
+            }
+        );
+        this.startText.setOrigin(0, 0);
+        this.startText.setScrollFactor(0);
+        this.startText.setDepth(100);
+
+        // Add blinking animation like a cursor
+        this.tweens.add({
+            targets: this.startText,
+            alpha: 0,
+            duration: 600,
+            ease: 'Linear',
+            yoyo: true,
+            repeat: -1
         });
 
         console.log('[CaveScene] create() complete');
@@ -250,13 +291,51 @@ export class CaveScene extends Scene {
             //console.log('[CaveScene] update #' + this.updateCount + ' - time:', time.toFixed(0), 'delta:', delta.toFixed(1));
         }
 
+        // Check for restart after game over
+        if (this.gameOver) {
+            if (Phaser.Input.Keyboard.JustDown(this.spaceKey)) {
+                console.log('[CaveScene] Restarting game...');
+                this.scene.restart();
+            }
+            return;
+        }
+
         if (this.player) {
+            // Check if game should start (arrow key pressed while not started)
+            if (!this.gameStarted) {
+                const arrowKeyPressed =
+                    this.cursors.up.isDown ||
+                    this.cursors.down.isDown ||
+                    this.cursors.left.isDown ||
+                    this.cursors.right.isDown ||
+                    this.wasd.up.isDown ||
+                    this.wasd.down.isDown ||
+                    this.wasd.left.isDown ||
+                    this.wasd.right.isDown;
+
+                if (arrowKeyPressed) {
+                    this.startGame();
+                }
+
+                // Still update light position even when not started
+                this.updateLightMask();
+                return;
+            }
+
+            // Game has started - normal gameplay
             // Pass input to player
             this.player.update(this.cursors, this.wasd);
 
             // Deplete oil over time (delta is in milliseconds, convert to seconds)
             const deltaSeconds = delta / 1000;
             this.currentOil -= this.oilDepletionRate * deltaSeconds;
+
+            // Update score timer (increment score every second)
+            this.scoreTimer += deltaSeconds;
+            if (this.scoreTimer >= 1) {
+                this.score += 1;
+                this.scoreTimer -= 1; // Keep remainder for accuracy
+            }
 
             // Clamp oil to valid range
             this.currentOil = Math.max(0, this.currentOil);
@@ -272,29 +351,88 @@ export class CaveScene extends Scene {
         }
     }
 
+    startGame() {
+        console.log('[CaveScene] Starting game!');
+        this.gameStarted = true;
+
+        // Remove start text
+        if (this.startText) {
+            this.startText.destroy();
+            this.startText = null;
+        }
+
+        // Launch the HUD scene
+        console.log('[CaveScene] Launching HUD scene...');
+        this.scene.launch('CaveHudScene');
+    }
+
     handleGameOver() {
         console.log('[CaveScene] handleGameOver() called');
+        this.gameOver = true;
 
-        // Stop the scene
-        this.scene.pause();
+        // Update high score if current score is higher
+        if (this.score > CaveScene.sessionHighScore) {
+            CaveScene.sessionHighScore = this.score;
+        }
 
-        // Display game over message
-        const centerX = this.cameras.main.worldView.centerX;
-        const centerY = this.cameras.main.worldView.centerY;
+        // Stop the HUD scene
+        this.scene.stop('CaveHudScene');
 
-        const gameOverText = this.add.text(
-            centerX,
-            centerY,
-            'GAME OVER\nOut of Oil!',
+        // Create full-screen black overlay
+        this.blackOverlay = this.add.rectangle(
+            0,
+            0,
+            this.cameras.main.width,
+            this.cameras.main.height,
+            0x000000
+        );
+        this.blackOverlay.setOrigin(0, 0);
+        this.blackOverlay.setScrollFactor(0);
+        this.blackOverlay.setDepth(150);
+
+        // Create game over text in same position as start text
+        this.gameOverText = this.add.text(
+            20,
+            20,
+            'Game Over. Press space to play again',
             {
-                fontSize: '48px',
-                color: '#ff0000',
-                align: 'center'
+                fontSize: '24px',
+                color: '#ffffff',
+                fontStyle: 'bold',
+                stroke: '#000000',
+                strokeThickness: 4
             }
         );
-        gameOverText.setOrigin(0.5);
-        gameOverText.setScrollFactor(0);
-        gameOverText.setDepth(200);
+        this.gameOverText.setOrigin(0, 0);
+        this.gameOverText.setScrollFactor(0);
+        this.gameOverText.setDepth(200);
+
+        // Add score display below the game over text
+        this.scoreDisplayText = this.add.text(
+            20,
+            60,
+            `Score: ${this.score}\nHigh Score: ${CaveScene.sessionHighScore}`,
+            {
+                fontSize: '20px',
+                color: '#ffaa00',
+                fontStyle: 'bold',
+                stroke: '#000000',
+                strokeThickness: 3
+            }
+        );
+        this.scoreDisplayText.setOrigin(0, 0);
+        this.scoreDisplayText.setScrollFactor(0);
+        this.scoreDisplayText.setDepth(200);
+
+        // Add blinking animation like the start text
+        this.tweens.add({
+            targets: this.gameOverText,
+            alpha: 0,
+            duration: 600,
+            ease: 'Linear',
+            yoyo: true,
+            repeat: -1
+        });
     }
 
     // Method to add oil (for pickups later)
@@ -305,5 +443,10 @@ export class CaveScene extends Scene {
     // Get current oil percentage
     getOilPercentage() {
         return (this.currentOil / this.maxOil) * 100;
+    }
+
+    // Get current score
+    getScore() {
+        return this.score;
     }
 }

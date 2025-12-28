@@ -59,6 +59,22 @@ export class CaveHudScene extends Scene {
         this.oilBarBorder.setStrokeStyle(2, 0x000000);
         this.oilBarBorder.setFillStyle(0x000000, 0); // Transparent fill
 
+        // Score text label (positioned below oil bar)
+        this.scoreText = this.add.text(
+            padding,
+            padding + barHeight + 10,
+            'Score: 0',
+            {
+                fontSize: '20px',
+                color: '#ffffff',
+                fontStyle: 'bold',
+                stroke: '#000000',
+                strokeThickness: 3
+            }
+        );
+        this.scoreText.setOrigin(0, 0);
+        this.scoreText.setScrollFactor(0);
+
         // Reference to the cave scene
         this.caveScene = this.scene.get('CaveScene');
     }
@@ -84,6 +100,12 @@ export class CaveHudScene extends Scene {
             } else {
                 this.oilBar.setFillStyle(0xff0000); // Red
             }
+        }
+
+        // Update score display
+        if (this.caveScene && this.caveScene.getScore) {
+            const score = this.caveScene.getScore();
+            this.scoreText.setText(`Score: ${score}`);
         }
     }
 }
