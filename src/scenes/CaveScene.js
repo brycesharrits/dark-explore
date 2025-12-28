@@ -1,5 +1,8 @@
 import { Scene } from 'phaser';
-import { CavePlayer } from '../gameobjects/CavePlayer';
+import { CaveEnemy } from '../gameobjects/CaveEnemy';
+import { PlayerManager } from '../managers/PlayerManager';
+import { DebugConfig } from '../config/DebugConfig';
+import { SpatialPartition } from '../utils/SpatialPartition';
 
 export class CaveScene extends Scene {
     // Static variable to store high score across game sessions (for the current browser session)
@@ -29,6 +32,16 @@ export class CaveScene extends Scene {
         // Oil pickup properties
         this.numOilPickups = 5; // Number of oil pickups to spawn
         this.oilPickupAmount = 25; // Amount of oil restored per pickup
+
+        // Enemy properties
+        this.enemySpawnDelay = 5000; // Spawn enemies after 5 seconds (in milliseconds)
+        this.enemySpawnTimer = null; // Timer for spawning enemies
+        this.enemies = null; // Group to hold enemies
+
+        // Debug/testing mode
+        this.debugGraphics = null; // Graphics object for debug visualizations
+        this.originalAmbientColor = 0x0a0a0a; // Store original ambient color
+        this.debugPlayerLabels = []; // Array of debug text labels for players
     }
 
     create() {
@@ -40,6 +53,13 @@ export class CaveScene extends Scene {
         this.currentOil = this.maxOil;
         this.score = 0;
         this.scoreTimer = 0;
+        this.enemySpawnTimer = null;
+
+        // Initialize enemies group
+        this.enemies = this.add.group({
+            classType: CaveEnemy,
+            runChildUpdate: true // Automatically call update on all enemies
+        });
 
         // Set world bounds based on grid size
         const worldWidth = this.gridWidth * this.tileSize;
@@ -47,17 +67,24 @@ export class CaveScene extends Scene {
         console.log('[CaveScene] World dimensions:', worldWidth, 'x', worldHeight);
         this.physics.world.setBounds(0, 0, worldWidth, worldHeight);
 
+        // Initialize spatial partitioning for performance optimization
+        console.log('[CaveScene] Initializing spatial partition...');
+        this.spatialPartition = new SpatialPartition(
+            { x: 0, y: 0, width: worldWidth, height: worldHeight },
+            4 // Capacity: 4 entities per node before subdividing
+        );
+
         // Create the tile grid
         console.log('[CaveScene] Creating tile grid...');
         this.createTileGrid();
 
-        // Create the player
-        console.log('[CaveScene] Creating player at', worldWidth / 2, worldHeight / 2);
-        this.player = new CavePlayer(
-            this,
-            worldWidth / 2,
-            worldHeight / 2
-        );
+        // Initialize PlayerManager and spawn human player
+        console.log('[CaveScene] Initializing PlayerManager...');
+        this.playerManager = new PlayerManager(this);
+        this.playerManager.spawnHumanPlayer(worldWidth / 2, worldHeight / 2);
+
+        // Convenience reference to human player (for compatibility)
+        this.player = this.playerManager.humanPlayer;
 
         // Create the lantern/visibility system
         console.log('[CaveScene] Creating lantern system...');
@@ -83,6 +110,17 @@ export class CaveScene extends Scene {
             right: Phaser.Input.Keyboard.KeyCodes.D
         });
         this.spaceKey = this.input.keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.SPACE);
+
+        // Debug mode toggle key (T)
+        this.debugKey = this.input.keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.T);
+        this.debugKey.on('down', () => {
+            this.toggleDebugMode();
+        });
+
+        // Create debug graphics object
+        this.debugGraphics = this.add.graphics();
+        this.debugGraphics.setDepth(1000); // Draw on top of everything
+        this.debugGraphics.setScrollFactor(0); // Fixed to camera
 
         // Create start screen text
         console.log('[CaveScene] Creating start screen text...');
@@ -215,8 +253,9 @@ export class CaveScene extends Scene {
             console.log(`[OIL PICKUPS] Spawned pickup ${i + 1} at (${x}, ${y})`);
         }
 
-        // Set up collision detection with player
-        this.physics.add.overlap(
+        // Set up collision detection with all players (will be updated after bots spawn)
+        // Initial collision with just the human player
+        this.oilPickupCollider = this.physics.add.overlap(
             this.player,
             this.oilPickups,
             this.collectOilPickup,
@@ -227,16 +266,16 @@ export class CaveScene extends Scene {
         console.log(`[OIL PICKUPS] Created ${this.numOilPickups} oil pickups with collision detection`);
     }
 
-    collectOilPickup(player, oilPickup) {
+    collectOilPickup(playerSprite, oilPickup) {
         console.log('[OIL PICKUPS] Collecting oil pickup!');
 
-        // Add oil to the player's lantern
-        this.addOil(this.oilPickupAmount);
+        // Add oil to the player (playerSprite is a BasePlayer instance)
+        playerSprite.addOil(this.oilPickupAmount);
 
         // Remove the pickup from the scene
         oilPickup.destroy();
 
-        console.log(`[OIL PICKUPS] Added ${this.oilPickupAmount} oil. Current oil: ${this.currentOil}/${this.maxOil}`);
+        console.log(`[OIL PICKUPS] ${playerSprite.name} collected oil. Current: ${playerSprite.currentOil.toFixed(1)}/${playerSprite.maxOil}`);
     }
 
     updateLightMask() {
@@ -323,32 +362,30 @@ export class CaveScene extends Scene {
             }
 
             // Game has started - normal gameplay
-            // Pass input to player
-            this.player.update(this.cursors, this.wasd);
 
-            // Deplete oil over time (delta is in milliseconds, convert to seconds)
-            const deltaSeconds = delta / 1000;
-            this.currentOil -= this.oilDepletionRate * deltaSeconds;
+            // Update spatial partition with all alive entities (for efficient queries)
+            this.updateSpatialPartition();
 
-            // Update score timer (increment score every second)
-            this.scoreTimer += deltaSeconds;
-            if (this.scoreTimer >= 1) {
-                this.score += 1;
-                this.scoreTimer -= 1; // Keep remainder for accuracy
-            }
+            // Update all players through PlayerManager
+            this.playerManager.updateAll(this.cursors, this.wasd, delta);
 
-            // Clamp oil to valid range
-            this.currentOil = Math.max(0, this.currentOil);
+            // For compatibility, sync scene-level variables with human player
+            // (These will be removed in later phases)
+            this.currentOil = this.player.currentOil;
+            this.score = this.player.score;
 
             // Update the light mask to reflect new position and oil level
             this.updateLightMask();
 
-            // Check for game over
-            if (this.currentOil <= 0) {
-                console.log('[CaveScene] Game Over - out of oil!');
+            // Check if human player was eliminated (handled by BasePlayer now)
+            if (!this.playerManager.isHumanAlive() && !this.gameOver) {
+                console.log('[CaveScene] Game Over - human player eliminated!');
                 this.handleGameOver();
             }
         }
+
+        // Update debug visualizations (if debug mode is enabled)
+        this.updateDebugVisuals();
     }
 
     startGame() {
@@ -361,9 +398,25 @@ export class CaveScene extends Scene {
             this.startText = null;
         }
 
+        // Spawn bots (Phase 3: spawn 49 bots for 50 total players)
+        console.log('[CaveScene] Spawning bots...');
+        this.playerManager.spawnBots(49, 0.3); // 49 bots (30% smart, 70% dumb) + 1 human = 50 total
+
+        // Setup collision detection for all players (human + bots)
+        this.setupMultiplayerCollisions();
+
         // Launch the HUD scene
         console.log('[CaveScene] Launching HUD scene...');
         this.scene.launch('CaveHudScene');
+
+        // Set up timer to spawn enemies after 5 seconds
+        console.log('[CaveScene] Setting up enemy spawn timer...');
+        this.enemySpawnTimer = this.time.delayedCall(
+            this.enemySpawnDelay,
+            this.spawnEnemies,
+            [],
+            this
+        );
     }
 
     handleGameOver() {
@@ -435,9 +488,90 @@ export class CaveScene extends Scene {
         });
     }
 
-    // Method to add oil (for pickups later)
-    addOil(amount) {
-        this.currentOil = Math.min(this.maxOil, this.currentOil + amount);
+    // Spawn enemies at random locations
+    spawnEnemies() {
+        console.log('[CaveScene] Spawning enemies...');
+
+        const worldWidth = this.gridWidth * this.tileSize;
+        const worldHeight = this.gridHeight * this.tileSize;
+        const padding = this.tileSize * 3; // Keep enemies away from edges
+
+        // Spawn 2 enemies
+        for (let i = 0; i < 2; i++) {
+            // Generate random position within world bounds, with padding
+            // Also ensure they spawn at least a certain distance from the player
+            let x, y, distanceFromPlayer;
+            do {
+                x = Phaser.Math.Between(padding, worldWidth - padding);
+                y = Phaser.Math.Between(padding, worldHeight - padding);
+                distanceFromPlayer = Phaser.Math.Distance.Between(x, y, this.player.x, this.player.y);
+            } while (distanceFromPlayer < 200); // Keep enemies at least 200 pixels away from player initially
+
+            // Create enemy
+            const enemy = new CaveEnemy(this, x, y);
+            this.enemies.add(enemy);
+
+            console.log(`[CaveScene] Spawned enemy ${i + 1} at (${x}, ${y}), distance from player: ${distanceFromPlayer.toFixed(0)}`);
+        }
+
+        console.log(`[CaveScene] Total enemies: ${this.enemies.getLength()}`);
+
+        // Set up collision detection between all players and enemies
+        this.enemyCollider = this.physics.add.overlap(
+            this.allPlayerSprites || this.player, // Use all players if available, fallback to just human
+            this.enemies,
+            this.handleEnemyCollision,
+            null,
+            this
+        );
+
+        console.log('[CaveScene] Enemy collision detection enabled for all players');
+    }
+
+    /**
+     * Setup collision detection for all players (human + bots) with enemies and oil pickups
+     * Called after bots are spawned in startGame()
+     */
+    setupMultiplayerCollisions() {
+        console.log('[CaveScene] Setting up multiplayer collisions...');
+
+        // Get all player sprites (human + bots)
+        const allPlayerSprites = this.playerManager.players.map(p => p);
+
+        // Remove old colliders if they exist
+        if (this.oilPickupCollider) {
+            this.oilPickupCollider.destroy();
+        }
+        if (this.enemyCollider) {
+            this.enemyCollider.destroy();
+        }
+
+        // Oil pickups vs all players
+        this.oilPickupCollider = this.physics.add.overlap(
+            allPlayerSprites,
+            this.oilPickups,
+            this.collectOilPickup,
+            null,
+            this
+        );
+
+        // Enemies vs all players (will be setup when enemies spawn)
+        // Store reference for when spawnEnemies is called
+        this.allPlayerSprites = allPlayerSprites;
+
+        console.log(`[CaveScene] Collision detection enabled for ${allPlayerSprites.length} players`);
+    }
+
+    // Handle collision between player and enemy
+    handleEnemyCollision(playerSprite, enemy) {
+        console.log(`[CaveScene] ${playerSprite.name} hit by enemy!`);
+
+        // Eliminate the player (works for human or bot)
+        // playerSprite is the Phaser sprite, which extends BasePlayer
+        if (playerSprite.isAlive() && !this.gameOver) {
+            playerSprite.eliminate('ENEMY_COLLISION');
+            // Game over will be triggered by the update loop checking isHumanAlive()
+        }
     }
 
     // Get current oil percentage
@@ -448,5 +582,115 @@ export class CaveScene extends Scene {
     // Get current score
     getScore() {
         return this.score;
+    }
+
+    /**
+     * Update spatial partition with all alive players
+     * Called each frame for efficient spatial queries by bot AI
+     */
+    updateSpatialPartition() {
+        // Clear previous frame's data
+        this.spatialPartition.clear();
+
+        // Insert all alive players
+        this.playerManager.getAlivePlayers().forEach(player => {
+            this.spatialPartition.insert(player);
+        });
+
+        // Note: We don't insert enemies/pickups here since bots use separate
+        // methods (this.scene.enemies, this.scene.oilPickups) to find those
+    }
+
+    /**
+     * Toggle debug/testing mode (press 'T' key)
+     */
+    toggleDebugMode() {
+        DebugConfig.toggle();
+
+        // Update ambient lighting based on debug mode
+        if (DebugConfig.isFeatureEnabled('fullVisibility')) {
+            // Brighten ambient light to see everything
+            this.lights.setAmbientColor(DebugConfig.visual.fullVisibilityAmbient);
+            console.log('[CaveScene] Debug mode: Full visibility ENABLED');
+        } else {
+            // Restore dark cave ambient
+            this.lights.setAmbientColor(this.originalAmbientColor);
+            console.log('[CaveScene] Debug mode: Full visibility DISABLED');
+        }
+
+        // Show/hide debug info
+        if (DebugConfig.enabled) {
+            console.log('[CaveScene] Debug mode: Press T to toggle off');
+            console.log('[CaveScene] Debug features:', DebugConfig.features);
+        } else {
+            // Clean up debug visualizations
+            this.debugGraphics.clear();
+            this.cleanupDebugLabels();
+        }
+    }
+
+    /**
+     * Clean up debug text labels
+     */
+    cleanupDebugLabels() {
+        this.debugPlayerLabels.forEach(label => {
+            if (label && label.destroy) {
+                label.destroy();
+            }
+        });
+        this.debugPlayerLabels = [];
+    }
+
+    /**
+     * Update debug visualizations (called every frame if debug mode is on)
+     */
+    updateDebugVisuals() {
+        if (!DebugConfig.enabled) return;
+
+        // Clear previous frame's debug drawings
+        this.debugGraphics.clear();
+
+        // Draw light radius indicator around human player
+        if (DebugConfig.isFeatureEnabled('showLightRadius') && this.player) {
+            const currentRadius = this.lanternLight.radius;
+
+            // Convert world position to screen position
+            const screenX = this.player.x - this.cameras.main.scrollX;
+            const screenY = this.player.y - this.cameras.main.scrollY;
+
+            // Draw circle outline showing light radius
+            this.debugGraphics.lineStyle(2, DebugConfig.visual.lightRadiusColor, 1);
+            this.debugGraphics.strokeCircle(screenX, screenY, currentRadius);
+
+            // Draw filled circle with transparency
+            this.debugGraphics.fillStyle(DebugConfig.visual.lightRadiusColor, DebugConfig.visual.lightRadiusAlpha);
+            this.debugGraphics.fillCircle(screenX, screenY, currentRadius);
+        }
+
+        // Show player names above their heads
+        if (DebugConfig.isFeatureEnabled('showPlayerNames')) {
+            this.updatePlayerNameLabels();
+        }
+    }
+
+    /**
+     * Update player name labels
+     */
+    updatePlayerNameLabels() {
+        // Clean up old labels
+        this.cleanupDebugLabels();
+
+        // Create new labels for all alive players
+        this.playerManager.getAlivePlayers().forEach(player => {
+            const label = this.add.text(
+                player.x,
+                player.y - 30,
+                player.name,
+                DebugConfig.visual.nameTextStyle
+            );
+            label.setOrigin(0.5, 0.5);
+            label.setDepth(1001);
+            this.debugPlayerLabels.push(label);
+        });
     }
 }
