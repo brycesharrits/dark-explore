@@ -143,6 +143,9 @@ export class CaveScene extends Scene {
         this.debugGraphics.setDepth(1000); // Draw on top of everything
         this.debugGraphics.setScrollFactor(0); // Fixed to camera
 
+        // Map to track player labels (for performance)
+        this.debugPlayerLabelMap = new Map(); // playerId -> text object
+
         // Create start screen text
         console.log('[CaveScene] Creating start screen text...');
         this.startText = this.add.text(
@@ -736,12 +739,21 @@ export class CaveScene extends Scene {
      * Clean up debug text labels
      */
     cleanupDebugLabels() {
-        this.debugPlayerLabels.forEach(label => {
-            if (label && label.destroy) {
-                label.destroy();
-            }
-        });
-        this.debugPlayerLabels = [];
+        // Clean up map-based labels
+        for (const [playerId, label] of this.debugPlayerLabelMap.entries()) {
+            label.destroy();
+        }
+        this.debugPlayerLabelMap.clear();
+
+        // Clean up old array-based labels (for backward compatibility)
+        if (this.debugPlayerLabels) {
+            this.debugPlayerLabels.forEach(label => {
+                if (label && label.destroy) {
+                    label.destroy();
+                }
+            });
+            this.debugPlayerLabels = [];
+        }
     }
 
     /**
@@ -777,23 +789,39 @@ export class CaveScene extends Scene {
     }
 
     /**
-     * Update player name labels
+     * Update player name labels (optimized - only creates/destroys when needed)
      */
     updatePlayerNameLabels() {
-        // Clean up old labels
-        this.cleanupDebugLabels();
+        const alivePlayers = this.playerManager.getAlivePlayers();
+        const alivePlayerIds = new Set(alivePlayers.map(p => p.playerId));
 
-        // Create new labels for all alive players
-        this.playerManager.getAlivePlayers().forEach(player => {
-            const label = this.add.text(
-                player.x,
-                player.y - 30,
-                player.name,
-                DebugConfig.visual.nameTextStyle
-            );
-            label.setOrigin(0.5, 0.5);
-            label.setDepth(1001);
-            this.debugPlayerLabels.push(label);
+        // Remove labels for dead players
+        for (const [playerId, label] of this.debugPlayerLabelMap.entries()) {
+            if (!alivePlayerIds.has(playerId)) {
+                label.destroy();
+                this.debugPlayerLabelMap.delete(playerId);
+            }
+        }
+
+        // Update or create labels for alive players
+        alivePlayers.forEach(player => {
+            let label = this.debugPlayerLabelMap.get(player.playerId);
+
+            if (!label) {
+                // Create new label
+                label = this.add.text(
+                    player.x,
+                    player.y - 30,
+                    player.name,
+                    DebugConfig.visual.nameTextStyle
+                );
+                label.setOrigin(0.5, 0.5);
+                label.setDepth(1001);
+                this.debugPlayerLabelMap.set(player.playerId, label);
+            } else {
+                // Just update position (very cheap!)
+                label.setPosition(player.x, player.y - 30);
+            }
         });
     }
 }
