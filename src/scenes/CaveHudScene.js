@@ -75,6 +75,22 @@ export class CaveHudScene extends Scene {
         this.scoreText.setOrigin(0, 0);
         this.scoreText.setScrollFactor(0);
 
+        // Players alive text (Phase 6 - positioned below score)
+        this.playersAliveText = this.add.text(
+            padding,
+            padding + barHeight + 40,
+            'Players Alive: 50/50',
+            {
+                fontSize: '16px',
+                color: '#00ff00',
+                fontStyle: 'bold',
+                stroke: '#000000',
+                strokeThickness: 2
+            }
+        );
+        this.playersAliveText.setOrigin(0, 0);
+        this.playersAliveText.setScrollFactor(0);
+
         // Reference to the cave scene
         this.caveScene = this.scene.get('CaveScene');
     }
@@ -106,6 +122,23 @@ export class CaveHudScene extends Scene {
         if (this.caveScene && this.caveScene.getScore) {
             const score = this.caveScene.getScore();
             this.scoreText.setText(`Score: ${score}`);
+        }
+
+        // Update players alive display (Phase 6)
+        if (this.caveScene && this.caveScene.eliminationTracker) {
+            const tracker = this.caveScene.eliminationTracker;
+            const playersAlive = tracker.getAlivePlayers();
+            const totalPlayers = tracker.totalPlayers || 50;
+            this.playersAliveText.setText(`Players Alive: ${playersAlive}/${totalPlayers}`);
+
+            // Change color based on how many players are left
+            if (playersAlive <= 10) {
+                this.playersAliveText.setColor('#ff0000'); // Red when few players left
+            } else if (playersAlive <= 25) {
+                this.playersAliveText.setColor('#ffaa00'); // Orange
+            } else {
+                this.playersAliveText.setColor('#00ff00'); // Green
+            }
         }
     }
 }

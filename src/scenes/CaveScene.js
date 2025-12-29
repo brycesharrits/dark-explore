@@ -3,6 +3,9 @@ import { CaveEnemy } from '../gameobjects/CaveEnemy';
 import { PlayerManager } from '../managers/PlayerManager';
 import { DebugConfig } from '../config/DebugConfig';
 import { SpatialPartition } from '../utils/SpatialPartition';
+import { OilPickupManager } from '../managers/OilPickupManager';
+import { EliminationTracker } from '../managers/EliminationTracker';
+import { EliminationFeed } from '../ui/EliminationFeed';
 
 export class CaveScene extends Scene {
     // Static variable to store high score across game sessions (for the current browser session)
@@ -11,8 +14,8 @@ export class CaveScene extends Scene {
     constructor() {
         super({ key: 'CaveScene' });
         this.tileSize = 32; // Size of each tile in pixels
-        this.gridWidth = 30; // Number of tiles wide
-        this.gridHeight = 30; // Number of tiles tall
+        this.gridWidth = 50; // Number of tiles wide (Phase 4: expanded from 30)
+        this.gridHeight = 50; // Number of tiles tall (Phase 4: expanded from 30)
 
         // Game state
         this.gameStarted = false; // Track if game has started
@@ -29,9 +32,14 @@ export class CaveScene extends Scene {
         this.minRadiusBeforeDim = 80; // Minimum radius before dimming starts (circle stops shrinking here)
         this.maxLightIntensity = 1.5; // Maximum light intensity
 
-        // Oil pickup properties
-        this.numOilPickups = 5; // Number of oil pickups to spawn
-        this.oilPickupAmount = 25; // Amount of oil restored per pickup
+        // Oil pickup properties (Phase 5: managed by OilPickupManager)
+        this.numOilPickups = 18; // Number of oil pickups (increased for 50 players)
+        this.oilPickupManager = null; // Manager for oil pickups with respawn
+
+        // Elimination tracking (Phase 6)
+        this.eliminationTracker = null; // Tracks eliminations and rankings
+        this.eliminationFeed = null; // Visual feed for eliminations
+        this.victoryAchieved = false; // Track if victory condition has been met
 
         // Enemy properties
         this.enemySpawnDelay = 5000; // Spawn enemies after 5 seconds (in milliseconds)
@@ -50,6 +58,7 @@ export class CaveScene extends Scene {
         // Reset game state (important for scene restart)
         this.gameStarted = false;
         this.gameOver = false;
+        this.victoryAchieved = false;
         this.currentOil = this.maxOil;
         this.score = 0;
         this.scoreTimer = 0;
@@ -90,9 +99,21 @@ export class CaveScene extends Scene {
         console.log('[CaveScene] Creating lantern system...');
         this.createLanternSystem(worldWidth, worldHeight);
 
-        // Create oil pickups
-        console.log('[CaveScene] Creating oil pickups...');
-        this.createOilPickups(worldWidth, worldHeight);
+        // Create oil pickups with respawn system (Phase 5)
+        console.log('[CaveScene] Initializing OilPickupManager...');
+        this.oilPickupManager = new OilPickupManager(this);
+        this.oilPickupManager.spawnPickups(this.numOilPickups);
+
+        // Initialize elimination tracker (Phase 6)
+        console.log('[CaveScene] Initializing EliminationTracker...');
+        this.eliminationTracker = new EliminationTracker(this);
+
+        // Initialize elimination feed UI (Phase 6)
+        console.log('[CaveScene] Initializing EliminationFeed...');
+        this.eliminationFeed = new EliminationFeed(this);
+
+        // Listen for player elimination events (Phase 6)
+        this.events.on('player-eliminated', this.onPlayerEliminated, this);
 
         // Configure camera to follow player
         console.log('[CaveScene] Configuring camera...');
@@ -220,62 +241,12 @@ export class CaveScene extends Scene {
         console.log('=== LANTERN SETUP COMPLETE ===\n');
     }
 
-    createOilPickups(worldWidth, worldHeight) {
-        console.log('[OIL PICKUPS] Creating oil pickup group...');
-
-        // Create a physics group for oil pickups
-        this.oilPickups = this.physics.add.group();
-
-        // Spawn oil pickups at random locations
-        for (let i = 0; i < this.numOilPickups; i++) {
-            // Generate random position within world bounds, with some padding
-            const padding = this.tileSize * 2;
-            const x = Phaser.Math.Between(padding, worldWidth - padding);
-            const y = Phaser.Math.Between(padding, worldHeight - padding);
-
-            // Create a graphics object for the oil pickup (small red circle)
-            const graphics = this.make.graphics({ x: 0, y: 0, add: false });
-            graphics.fillStyle(0xff6600, 1); // Orange color for oil
-            graphics.fillCircle(8, 8, 6); // Small circle with radius 6
-
-            // Generate a unique texture for this pickup
-            const textureName = `oil-pickup-${i}`;
-            graphics.generateTexture(textureName, 16, 16);
-            graphics.destroy();
-
-            // Create the oil pickup sprite
-            const oilPickup = this.physics.add.sprite(x, y, textureName);
-            oilPickup.setPipeline('Light2D'); // Enable lighting on the pickup
-
-            // Add to the group
-            this.oilPickups.add(oilPickup);
-
-            console.log(`[OIL PICKUPS] Spawned pickup ${i + 1} at (${x}, ${y})`);
-        }
-
-        // Set up collision detection with all players (will be updated after bots spawn)
-        // Initial collision with just the human player
-        this.oilPickupCollider = this.physics.add.overlap(
-            this.player,
-            this.oilPickups,
-            this.collectOilPickup,
-            null,
-            this
-        );
-
-        console.log(`[OIL PICKUPS] Created ${this.numOilPickups} oil pickups with collision detection`);
-    }
-
-    collectOilPickup(playerSprite, oilPickup) {
-        console.log('[OIL PICKUPS] Collecting oil pickup!');
-
-        // Add oil to the player (playerSprite is a BasePlayer instance)
-        playerSprite.addOil(this.oilPickupAmount);
-
-        // Remove the pickup from the scene
-        oilPickup.destroy();
-
-        console.log(`[OIL PICKUPS] ${playerSprite.name} collected oil. Current: ${playerSprite.currentOil.toFixed(1)}/${playerSprite.maxOil}`);
+    /**
+     * Handle oil pickup collection (Phase 5: uses OilPickupManager)
+     */
+    collectOilPickup(playerSprite, oilPickupSprite) {
+        // Delegate to OilPickupManager
+        this.oilPickupManager.collectPickup(oilPickupSprite, playerSprite);
     }
 
     updateLightMask() {
@@ -369,6 +340,9 @@ export class CaveScene extends Scene {
             // Update all players through PlayerManager
             this.playerManager.updateAll(this.cursors, this.wasd, delta);
 
+            // Update oil pickups (Phase 5: handle respawn timers and animations)
+            this.oilPickupManager.update(delta);
+
             // For compatibility, sync scene-level variables with human player
             // (These will be removed in later phases)
             this.currentOil = this.player.currentOil;
@@ -402,6 +376,11 @@ export class CaveScene extends Scene {
         console.log('[CaveScene] Spawning bots...');
         this.playerManager.spawnBots(49, 0.3); // 49 bots (30% smart, 70% dumb) + 1 human = 50 total
 
+        // Initialize elimination tracker with total player count (Phase 6)
+        const totalPlayers = this.playerManager.players.length;
+        this.eliminationTracker.initialize(totalPlayers);
+        console.log(`[CaveScene] Elimination tracker initialized for ${totalPlayers} players`);
+
         // Setup collision detection for all players (human + bots)
         this.setupMultiplayerCollisions();
 
@@ -417,6 +396,39 @@ export class CaveScene extends Scene {
             [],
             this
         );
+    }
+
+    /**
+     * Handle player elimination event (Phase 6)
+     * Called when any player is eliminated
+     */
+    onPlayerEliminated(player, reason) {
+        console.log(`[CaveScene] onPlayerEliminated: ${player.name} - ${reason}`);
+
+        // Record elimination in tracker
+        const gameTime = this.time.now / 1000; // Convert to seconds
+        const elimination = this.eliminationTracker.recordElimination(player, reason, gameTime);
+
+        // Store final rank on the player object
+        player.finalRank = elimination.rank;
+
+        // Add to elimination feed (Phase 6)
+        if (this.eliminationFeed) {
+            this.eliminationFeed.addElimination(player.name, reason, elimination.rank);
+        }
+
+        // Check if human was eliminated
+        if (player.isHuman && !this.gameOver) {
+            console.log('[CaveScene] Human player eliminated!');
+            this.handleGameOver();
+            return;
+        }
+
+        // Check for victory condition (only 1 player left)
+        if (this.eliminationTracker.hasWinner() && !this.victoryAchieved) {
+            console.log('[CaveScene] Victory condition met!');
+            this.handleVictory();
+        }
     }
 
     handleGameOver() {
@@ -443,6 +455,13 @@ export class CaveScene extends Scene {
         this.blackOverlay.setScrollFactor(0);
         this.blackOverlay.setDepth(150);
 
+        // Get human player's elimination data (Phase 6)
+        const humanElimination = this.eliminationTracker.getHumanElimination();
+        const rank = humanElimination ? humanElimination.rank : '?';
+        const rankText = EliminationTracker.getOrdinalSuffix(rank);
+        const reason = humanElimination ? EliminationTracker.formatReason(humanElimination.reason) : 'unknown';
+        const playersLeft = this.eliminationTracker.getAlivePlayers();
+
         // Create game over text in same position as start text
         this.gameOverText = this.add.text(
             20,
@@ -460,13 +479,17 @@ export class CaveScene extends Scene {
         this.gameOverText.setScrollFactor(0);
         this.gameOverText.setDepth(200);
 
-        // Add score display below the game over text
+        // Add score and rank display below the game over text (Phase 6)
         this.scoreDisplayText = this.add.text(
             20,
             60,
-            `Score: ${this.score}\nHigh Score: ${CaveScene.sessionHighScore}`,
+            `You placed ${rankText} out of ${this.eliminationTracker.totalPlayers}\n` +
+            `${playersLeft} players remaining\n` +
+            `Eliminated: ${reason}\n\n` +
+            `Score: ${this.score}\n` +
+            `High Score: ${CaveScene.sessionHighScore}`,
             {
-                fontSize: '20px',
+                fontSize: '18px',
                 color: '#ffaa00',
                 fontStyle: 'bold',
                 stroke: '#000000',
@@ -488,6 +511,85 @@ export class CaveScene extends Scene {
         });
     }
 
+    /**
+     * Handle victory condition (Phase 6)
+     * Called when human player is the last one alive
+     */
+    handleVictory() {
+        console.log('[CaveScene] handleVictory() called');
+        this.victoryAchieved = true;
+        this.gameOver = true; // Also set gameOver to prevent updates
+
+        // Update high score if current score is higher
+        if (this.score > CaveScene.sessionHighScore) {
+            CaveScene.sessionHighScore = this.score;
+        }
+
+        // Stop the HUD scene
+        this.scene.stop('CaveHudScene');
+
+        // Create full-screen overlay with victory colors (gold tint)
+        this.blackOverlay = this.add.rectangle(
+            0,
+            0,
+            this.cameras.main.width,
+            this.cameras.main.height,
+            0x1a1a00 // Dark gold tint
+        );
+        this.blackOverlay.setOrigin(0, 0);
+        this.blackOverlay.setScrollFactor(0);
+        this.blackOverlay.setDepth(150);
+
+        // Create victory text
+        this.victoryText = this.add.text(
+            20,
+            20,
+            'VICTORY ROYALE!',
+            {
+                fontSize: '32px',
+                color: '#ffd700', // Gold color
+                fontStyle: 'bold',
+                stroke: '#000000',
+                strokeThickness: 6
+            }
+        );
+        this.victoryText.setOrigin(0, 0);
+        this.victoryText.setScrollFactor(0);
+        this.victoryText.setDepth(200);
+
+        // Add stats display below the victory text
+        this.victoryStatsText = this.add.text(
+            20,
+            70,
+            `You are the last survivor!\n` +
+            `Winner out of ${this.eliminationTracker.totalPlayers} players\n\n` +
+            `Final Score: ${this.score}\n` +
+            `High Score: ${CaveScene.sessionHighScore}\n` +
+            `Oil Remaining: ${this.player.currentOil.toFixed(0)}%\n\n` +
+            `Press space to play again`,
+            {
+                fontSize: '18px',
+                color: '#ffff00',
+                fontStyle: 'bold',
+                stroke: '#000000',
+                strokeThickness: 3
+            }
+        );
+        this.victoryStatsText.setOrigin(0, 0);
+        this.victoryStatsText.setScrollFactor(0);
+        this.victoryStatsText.setDepth(200);
+
+        // Add pulsing animation to victory text
+        this.tweens.add({
+            targets: this.victoryText,
+            scale: 1.1,
+            duration: 800,
+            ease: 'Sine.easeInOut',
+            yoyo: true,
+            repeat: -1
+        });
+    }
+
     // Spawn enemies at random locations
     spawnEnemies() {
         console.log('[CaveScene] Spawning enemies...');
@@ -496,8 +598,9 @@ export class CaveScene extends Scene {
         const worldHeight = this.gridHeight * this.tileSize;
         const padding = this.tileSize * 3; // Keep enemies away from edges
 
-        // Spawn 2 enemies
-        for (let i = 0; i < 2; i++) {
+        // Spawn 15 enemies (Phase 4: ~1:3 enemy-to-player ratio for 50 players)
+        const enemyCount = 15;
+        for (let i = 0; i < enemyCount; i++) {
             // Generate random position within world bounds, with padding
             // Also ensure they spawn at least a certain distance from the player
             let x, y, distanceFromPlayer;
@@ -546,10 +649,10 @@ export class CaveScene extends Scene {
             this.enemyCollider.destroy();
         }
 
-        // Oil pickups vs all players
+        // Oil pickups vs all players (Phase 5: uses OilPickupManager)
         this.oilPickupCollider = this.physics.add.overlap(
             allPlayerSprites,
-            this.oilPickups,
+            this.oilPickupManager.getActiveSprites(),
             this.collectOilPickup,
             null,
             this
