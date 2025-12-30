@@ -4,6 +4,7 @@ import { PlayerManager } from '../managers/PlayerManager';
 import { DebugConfig } from '../config/DebugConfig';
 import { SpatialPartition } from '../utils/SpatialPartition';
 import { OilPickupManager } from '../managers/OilPickupManager';
+import { PowerUpManager } from '../managers/PowerUpManager';
 import { EliminationTracker } from '../managers/EliminationTracker';
 import { EliminationFeed } from '../ui/EliminationFeed';
 
@@ -33,8 +34,12 @@ export class CaveScene extends Scene {
         this.maxLightIntensity = 1.5; // Maximum light intensity
 
         // Oil pickup properties (Phase 5: managed by OilPickupManager)
-        this.numOilPickups = 72; // Number of oil pickups (scaled for 200×200 map: 4× larger)
+        this.numOilPickups = 86; // Number of oil pickups (scaled for 200×200 map + 20% increase)
         this.oilPickupManager = null; // Manager for oil pickups with respawn
+
+        // Power-up properties
+        this.numPowerUps = 15; // Number of power-ups (less common than oil)
+        this.powerUpManager = null; // Manager for power-ups
 
         // Elimination tracking (Phase 6)
         this.eliminationTracker = null; // Tracks eliminations and rankings
@@ -51,6 +56,9 @@ export class CaveScene extends Scene {
         this.debugGraphics = null; // Graphics object for debug visualizations
         this.originalAmbientColor = 0x0a0a0a; // Store original ambient color
         this.debugPlayerLabels = []; // Array of debug text labels for players
+
+        // Full vision power-up indicator
+        this.fullVisionIndicatorActive = false; // When true, show light radius circle
     }
 
     create() {
@@ -64,6 +72,9 @@ export class CaveScene extends Scene {
         this.score = 0;
         this.scoreTimer = 0;
         this.enemySpawnTimer = null;
+
+        // Reset power-up states
+        this.fullVisionIndicatorActive = false;
 
         // Initialize enemies group
         this.enemies = this.add.group({
@@ -96,6 +107,10 @@ export class CaveScene extends Scene {
         // Convenience reference to human player (for compatibility)
         this.player = this.playerManager.humanPlayer;
 
+        // Enable collision between player and walls
+        console.log('[CaveScene] Setting up wall collision...');
+        this.physics.add.collider(this.player, this.tileLayer);
+
         // Create the lantern/visibility system
         console.log('[CaveScene] Creating lantern system...');
         this.createLanternSystem(worldWidth, worldHeight);
@@ -104,6 +119,11 @@ export class CaveScene extends Scene {
         console.log('[CaveScene] Initializing OilPickupManager...');
         this.oilPickupManager = new OilPickupManager(this);
         this.oilPickupManager.spawnPickups(this.numOilPickups);
+
+        // Create power-ups
+        console.log('[CaveScene] Initializing PowerUpManager...');
+        this.powerUpManager = new PowerUpManager(this);
+        this.powerUpManager.spawnPowerUps(this.numPowerUps);
 
         // Initialize elimination tracker (Phase 6)
         console.log('[CaveScene] Initializing EliminationTracker...');
@@ -199,16 +219,13 @@ export class CaveScene extends Scene {
         // Step 4: Create layer from tileset
         const layer = map.createBlankLayer('ground', tileset, 0, 0);
 
-        // Step 5: Fill layer with checkerboard pattern
-        for (let y = 0; y < this.gridHeight; y++) {
-            for (let x = 0; x < this.gridWidth; x++) {
-                // Alternate between tile 0 (light) and tile 1 (dark)
-                const tileIndex = (x + y) % 2 === 0 ? 0 : 1;
-                layer.putTileAt(tileIndex, x, y);
-            }
-        }
+        // Step 5: Generate maze layout (floor + walls)
+        this.generateMaze(layer);
 
-        // Step 6: Enable lighting on the tilemap layer
+        // Step 6: Enable collision on wall tiles (tile index 2)
+        layer.setCollisionByExclusion([0, 1]); // Everything except floor tiles collides
+
+        // Step 7: Enable lighting on the tilemap layer
         layer.setPipeline('Light2D');
 
         // Store reference for potential future use
@@ -219,30 +236,140 @@ export class CaveScene extends Scene {
     }
 
     /**
+     * Generate maze layout with rooms and corridors
+     * Simple procedural generation for performance
+     */
+    generateMaze(layer) {
+        console.log('[CaveScene] Generating maze layout...');
+
+        // Step 1: Fill entire map with walls
+        for (let y = 0; y < this.gridHeight; y++) {
+            for (let x = 0; x < this.gridWidth; x++) {
+                layer.putTileAt(2, x, y); // Tile 2 = wall
+            }
+        }
+
+        // Step 2: Create rooms
+        const numRooms = Math.floor((this.gridWidth * this.gridHeight) / 400); // ~1 room per 400 tiles
+        const rooms = [];
+        const minRoomSize = 5;
+        const maxRoomSize = 15;
+
+        for (let i = 0; i < numRooms; i++) {
+            const roomWidth = Phaser.Math.Between(minRoomSize, maxRoomSize);
+            const roomHeight = Phaser.Math.Between(minRoomSize, maxRoomSize);
+            const roomX = Phaser.Math.Between(2, this.gridWidth - roomWidth - 2);
+            const roomY = Phaser.Math.Between(2, this.gridHeight - roomHeight - 2);
+
+            // Carve out room with checkerboard floor
+            for (let y = roomY; y < roomY + roomHeight; y++) {
+                for (let x = roomX; x < roomX + roomWidth; x++) {
+                    const floorTile = (x + y) % 2 === 0 ? 0 : 1;
+                    layer.putTileAt(floorTile, x, y);
+                }
+            }
+
+            rooms.push({
+                x: roomX + Math.floor(roomWidth / 2),
+                y: roomY + Math.floor(roomHeight / 2),
+                width: roomWidth,
+                height: roomHeight
+            });
+        }
+
+        // Step 3: Connect rooms with corridors
+        for (let i = 0; i < rooms.length - 1; i++) {
+            const roomA = rooms[i];
+            const roomB = rooms[i + 1];
+
+            // Create L-shaped corridor
+            this.createCorridor(layer, roomA.x, roomA.y, roomB.x, roomB.y);
+        }
+
+        // Step 4: Ensure player starting position is clear (center of map)
+        const centerX = Math.floor(this.gridWidth / 2);
+        const centerY = Math.floor(this.gridHeight / 2);
+        const startingArea = 5; // Clear 5x5 area around center
+
+        for (let y = centerY - startingArea; y <= centerY + startingArea; y++) {
+            for (let x = centerX - startingArea; x <= centerX + startingArea; x++) {
+                if (x >= 0 && x < this.gridWidth && y >= 0 && y < this.gridHeight) {
+                    const floorTile = (x + y) % 2 === 0 ? 0 : 1;
+                    layer.putTileAt(floorTile, x, y);
+                }
+            }
+        }
+
+        console.log(`[CaveScene] Maze generated with ${rooms.length} rooms`);
+    }
+
+    /**
+     * Create L-shaped corridor between two points
+     */
+    createCorridor(layer, x1, y1, x2, y2) {
+        const corridorWidth = 2;
+
+        // Horizontal corridor
+        const startX = Math.min(x1, x2);
+        const endX = Math.max(x1, x2);
+        for (let x = startX; x <= endX; x++) {
+            for (let dy = -Math.floor(corridorWidth / 2); dy <= Math.floor(corridorWidth / 2); dy++) {
+                const y = y1 + dy;
+                if (y >= 0 && y < this.gridHeight) {
+                    const floorTile = (x + y) % 2 === 0 ? 0 : 1;
+                    layer.putTileAt(floorTile, x, y);
+                }
+            }
+        }
+
+        // Vertical corridor
+        const startY = Math.min(y1, y2);
+        const endY = Math.max(y1, y2);
+        for (let y = startY; y <= endY; y++) {
+            for (let dx = -Math.floor(corridorWidth / 2); dx <= Math.floor(corridorWidth / 2); dx++) {
+                const x = x2 + dx;
+                if (x >= 0 && x < this.gridWidth) {
+                    const floorTile = (x + y) % 2 === 0 ? 0 : 1;
+                    layer.putTileAt(floorTile, x, y);
+                }
+            }
+        }
+    }
+
+    /**
      * Create tileset texture for the tilemap (Optimization #2)
-     * Generates a small texture with 2 tile variants for checkerboard pattern
+     * Generates a small texture with 3 tile variants: floor tiles + wall
      */
     createTilesetTexture() {
         // Create graphics object to draw tiles
         const graphics = this.make.graphics({ x: 0, y: 0, add: false });
 
-        // Tile 0: Light gray with border
+        // Tile 0: Light gray floor with border
         graphics.fillStyle(0x555555, 1);
         graphics.fillRect(0, 0, this.tileSize, this.tileSize);
         graphics.lineStyle(1, 0x333333, 0.5);
         graphics.strokeRect(0, 0, this.tileSize, this.tileSize);
 
-        // Tile 1: Dark gray with border
+        // Tile 1: Dark gray floor with border
         graphics.fillStyle(0x444444, 1);
         graphics.fillRect(this.tileSize, 0, this.tileSize, this.tileSize);
         graphics.lineStyle(1, 0x333333, 0.5);
         graphics.strokeRect(this.tileSize, 0, this.tileSize, this.tileSize);
 
-        // Generate texture from graphics (2 tiles side by side)
-        graphics.generateTexture('cave-tileset', this.tileSize * 2, this.tileSize);
+        // Tile 2: Wall tile (darker with thicker border for depth)
+        graphics.fillStyle(0x222222, 1); // Very dark gray
+        graphics.fillRect(this.tileSize * 2, 0, this.tileSize, this.tileSize);
+        graphics.lineStyle(2, 0x111111, 1); // Thick dark border
+        graphics.strokeRect(this.tileSize * 2, 0, this.tileSize, this.tileSize);
+        // Add inner highlight for 3D effect
+        graphics.lineStyle(1, 0x333333, 0.8);
+        graphics.strokeRect(this.tileSize * 2 + 2, 2, this.tileSize - 4, this.tileSize - 4);
+
+        // Generate texture from graphics (3 tiles side by side)
+        graphics.generateTexture('cave-tileset', this.tileSize * 3, this.tileSize);
         graphics.destroy();
 
-        console.log('[CaveScene] Tileset texture created: 2 tiles @', this.tileSize, 'x', this.tileSize);
+        console.log('[CaveScene] Tileset texture created: 3 tiles @', this.tileSize, 'x', this.tileSize);
     }
 
     createLanternSystem(worldWidth, worldHeight) {
@@ -274,6 +401,14 @@ export class CaveScene extends Scene {
     collectOilPickup(playerSprite, oilPickupSprite) {
         // Delegate to OilPickupManager
         this.oilPickupManager.collectPickup(oilPickupSprite, playerSprite);
+    }
+
+    /**
+     * Handle power-up collection
+     */
+    collectPowerUp(playerSprite, powerUpSprite) {
+        // Delegate to PowerUpManager
+        this.powerUpManager.collectPowerUp(powerUpSprite, playerSprite);
     }
 
     updateLightMask() {
@@ -370,6 +505,9 @@ export class CaveScene extends Scene {
             // Update oil pickups (Phase 5: handle respawn timers and animations)
             this.oilPickupManager.update(delta);
 
+            // Update power-ups (handle respawn timers and animations)
+            this.powerUpManager.update(delta);
+
             // For compatibility, sync scene-level variables with human player
             // (These will be removed in later phases)
             this.currentOil = this.player.currentOil;
@@ -465,6 +603,11 @@ export class CaveScene extends Scene {
         // Update high score if current score is higher
         if (this.score > CaveScene.sessionHighScore) {
             CaveScene.sessionHighScore = this.score;
+        }
+
+        // Clean up any active full vision effect
+        if (this.player && this.player.fullVisionActive) {
+            this.powerUpManager.endFullVisionEffect(this.player);
         }
 
         // Stop the HUD scene
@@ -685,11 +828,29 @@ export class CaveScene extends Scene {
             this
         );
 
+        // Power-ups vs all players
+        if (this.powerUpCollider) {
+            this.powerUpCollider.destroy();
+        }
+        this.powerUpCollider = this.physics.add.overlap(
+            allPlayerSprites,
+            this.powerUpManager.getActiveSprites(),
+            this.collectPowerUp,
+            null,
+            this
+        );
+
+        // Walls vs all players (including bots)
+        if (this.wallCollider) {
+            this.wallCollider.destroy();
+        }
+        this.wallCollider = this.physics.add.collider(allPlayerSprites, this.tileLayer);
+
         // Enemies vs all players (will be setup when enemies spawn)
         // Store reference for when spawnEnemies is called
         this.allPlayerSprites = allPlayerSprites;
 
-        console.log(`[CaveScene] Collision detection enabled for ${allPlayerSprites.length} players`);
+        console.log(`[CaveScene] Collision detection enabled for ${allPlayerSprites.length} players (including walls)`);
     }
 
     // Handle collision between player and enemy
@@ -745,6 +906,16 @@ export class CaveScene extends Scene {
                 }
             });
         }
+
+        // Insert all active power-ups (enable spatial queries for bots)
+        if (this.powerUpManager) {
+            const activePowerUps = this.powerUpManager.getActiveSprites();
+            activePowerUps.forEach(powerUp => {
+                if (powerUp.active && powerUp.visible) {
+                    this.spatialPartition.insert(powerUp, 'powerup');
+                }
+            });
+        }
     }
 
     /**
@@ -754,14 +925,19 @@ export class CaveScene extends Scene {
         DebugConfig.toggle();
 
         // Update ambient lighting based on debug mode
+        // BUT: Don't override if full vision power-up is active
         if (DebugConfig.isFeatureEnabled('fullVisibility')) {
             // Brighten ambient light to see everything
             this.lights.setAmbientColor(DebugConfig.visual.fullVisibilityAmbient);
             console.log('[CaveScene] Debug mode: Full visibility ENABLED');
         } else {
-            // Restore dark cave ambient
-            this.lights.setAmbientColor(this.originalAmbientColor);
-            console.log('[CaveScene] Debug mode: Full visibility DISABLED');
+            // Only restore dark cave ambient if full vision power-up is NOT active
+            if (!this.fullVisionIndicatorActive) {
+                this.lights.setAmbientColor(this.originalAmbientColor);
+                console.log('[CaveScene] Debug mode: Full visibility DISABLED - Darkness restored');
+            } else {
+                console.log('[CaveScene] Debug mode: Full visibility DISABLED - But full vision power-up is active');
+            }
         }
 
         // Show/hide debug info
@@ -769,7 +945,7 @@ export class CaveScene extends Scene {
             console.log('[CaveScene] Debug mode: Press T to toggle off');
             console.log('[CaveScene] Debug features:', DebugConfig.features);
         } else {
-            // Clean up debug visualizations
+            // Clean up debug visualizations (but keep full vision indicator if active)
             this.debugGraphics.clear();
             this.cleanupDebugLabels();
         }
@@ -797,16 +973,34 @@ export class CaveScene extends Scene {
     }
 
     /**
-     * Update debug visualizations (called every frame if debug mode is on)
+     * Update debug visualizations (called every frame)
      */
     updateDebugVisuals() {
-        if (!DebugConfig.enabled) return;
-
-        // Clear previous frame's debug drawings
+        // Always clear previous frame's debug drawings
         this.debugGraphics.clear();
 
-        // Draw light radius indicator around human player
-        if (DebugConfig.isFeatureEnabled('showLightRadius') && this.player) {
+        // Draw light radius indicator when full vision power-up is active
+        if (this.fullVisionIndicatorActive && this.player && this.lanternLight) {
+            const currentRadius = this.lanternLight.radius;
+
+            // Convert world position to screen position
+            const screenX = this.player.x - this.cameras.main.scrollX;
+            const screenY = this.player.y - this.cameras.main.scrollY;
+
+            // Draw circle outline showing light radius (yellow)
+            this.debugGraphics.lineStyle(2, 0xffff00, 1);
+            this.debugGraphics.strokeCircle(screenX, screenY, currentRadius);
+
+            // Draw filled circle with transparency
+            this.debugGraphics.fillStyle(0xffff00, 0.3);
+            this.debugGraphics.fillCircle(screenX, screenY, currentRadius);
+        }
+
+        // Return early if debug mode is not enabled
+        if (!DebugConfig.enabled) return;
+
+        // Draw light radius indicator in debug mode (if not already drawn by full vision)
+        if (DebugConfig.isFeatureEnabled('showLightRadius') && this.player && !this.fullVisionIndicatorActive) {
             const currentRadius = this.lanternLight.radius;
 
             // Convert world position to screen position
@@ -822,7 +1016,7 @@ export class CaveScene extends Scene {
             this.debugGraphics.fillCircle(screenX, screenY, currentRadius);
         }
 
-        // Show player names above their heads
+        // Show player names above their heads (only in debug mode)
         if (DebugConfig.isFeatureEnabled('showPlayerNames')) {
             this.updatePlayerNameLabels();
         }

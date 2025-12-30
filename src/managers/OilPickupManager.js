@@ -24,9 +24,13 @@ export class OilPickupManager {
         const padding = this.scene.tileSize * 2;
 
         for (let i = 0; i < count; i++) {
-            // Generate random position
-            const x = Phaser.Math.Between(padding, worldWidth - padding);
-            const y = Phaser.Math.Between(padding, worldHeight - padding);
+            // Generate random position (ensure it's not on a wall)
+            let x, y, attempts = 0;
+            do {
+                x = Phaser.Math.Between(padding, worldWidth - padding);
+                y = Phaser.Math.Between(padding, worldHeight - padding);
+                attempts++;
+            } while (attempts < 500 && this.isWallAt(x, y));
 
             // Create graphics for the oil pickup
             const graphics = this.scene.make.graphics({ x: 0, y: 0, add: false });
@@ -193,5 +197,19 @@ export class OilPickupManager {
             state: p.state,
             respawnTimer: p.respawnTimer > 0 ? (p.respawnTimer / 1000).toFixed(1) + 's' : '0s'
         }));
+    }
+
+    /**
+     * Check if position is on a wall tile
+     */
+    isWallAt(x, y) {
+        if (!this.scene.tileMap) return false;
+
+        const tileX = Math.floor(x / this.scene.tileSize);
+        const tileY = Math.floor(y / this.scene.tileSize);
+        const tile = this.scene.tileLayer.getTileAt(tileX, tileY);
+
+        // Tile 2 is wall
+        return tile && tile.index === 2;
     }
 }
