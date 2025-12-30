@@ -14,8 +14,8 @@ export class CaveScene extends Scene {
     constructor() {
         super({ key: 'CaveScene' });
         this.tileSize = 32; // Size of each tile in pixels
-        this.gridWidth = 50; // Number of tiles wide (Phase 4: expanded from 30)
-        this.gridHeight = 50; // Number of tiles tall (Phase 4: expanded from 30)
+        this.gridWidth = 200; // Number of tiles wide (Optimization #2 test: 200×200)
+        this.gridHeight = 200; // Number of tiles tall (Optimization #2 test: 200×200)
 
         // Game state
         this.gameStarted = false; // Track if game has started
@@ -33,7 +33,7 @@ export class CaveScene extends Scene {
         this.maxLightIntensity = 1.5; // Maximum light intensity
 
         // Oil pickup properties (Phase 5: managed by OilPickupManager)
-        this.numOilPickups = 18; // Number of oil pickups (increased for 50 players)
+        this.numOilPickups = 72; // Number of oil pickups (scaled for 200×200 map: 4× larger)
         this.oilPickupManager = null; // Manager for oil pickups with respawn
 
         // Elimination tracking (Phase 6)
@@ -45,6 +45,7 @@ export class CaveScene extends Scene {
         this.enemySpawnDelay = 5000; // Spawn enemies after 5 seconds (in milliseconds)
         this.enemySpawnTimer = null; // Timer for spawning enemies
         this.enemies = null; // Group to hold enemies
+        this.numEnemies = 60; // Number of enemies (scaled for 200×200 map: 4× larger)
 
         // Debug/testing mode
         this.debugGraphics = null; // Graphics object for debug visualizations
@@ -178,47 +179,70 @@ export class CaveScene extends Scene {
     }
 
     createTileGrid() {
-        console.log('[CaveScene] createTileGrid() - Drawing', this.gridWidth, 'x', this.gridHeight, 'tiles');
+        console.log('[CaveScene] createTileGrid() - Creating tilemap', this.gridWidth, 'x', this.gridHeight, 'tiles');
+        console.log('[CaveScene] Optimization #2: Using Phaser Tilemap for automatic chunking');
 
-        // Create a render texture to draw the tiles, which can be lit
-        const worldWidth = this.gridWidth * this.tileSize;
-        const worldHeight = this.gridHeight * this.tileSize;
-        const tileTexture = this.add.renderTexture(0, 0, worldWidth, worldHeight);
+        // Step 1: Create tileset texture (2 tile variants for checkerboard)
+        this.createTilesetTexture();
 
-        // Set origin to top-left so position (0,0) means top-left corner at (0,0)
-        tileTexture.setOrigin(0, 0);
+        // Step 2: Create blank tilemap
+        const map = this.make.tilemap({
+            tileWidth: this.tileSize,
+            tileHeight: this.tileSize,
+            width: this.gridWidth,
+            height: this.gridHeight
+        });
 
-        console.log('[CaveScene] Tile texture created:', worldWidth, 'x', worldHeight, 'at position (0, 0)');
+        // Step 3: Add tileset to the map (references our generated texture)
+        const tileset = map.addTilesetImage('cave-tileset', 'cave-tileset');
 
-        // Create a temporary graphics object to draw tiles
-        const graphics = this.make.graphics({ x: 0, y: 0, add: false });
+        // Step 4: Create layer from tileset
+        const layer = map.createBlankLayer('ground', tileset, 0, 0);
 
-        // Draw cave floor tiles
+        // Step 5: Fill layer with checkerboard pattern
         for (let y = 0; y < this.gridHeight; y++) {
             for (let x = 0; x < this.gridWidth; x++) {
-                const tileX = x * this.tileSize;
-                const tileY = y * this.tileSize;
-
-                // Alternate between two shades of gray for a checkerboard pattern
-                const color = (x + y) % 2 === 0 ? 0x555555 : 0x444444;
-
-                graphics.fillStyle(color, 1);
-                graphics.fillRect(tileX, tileY, this.tileSize, this.tileSize);
-
-                // Draw tile border
-                graphics.lineStyle(1, 0x333333, 0.5);
-                graphics.strokeRect(tileX, tileY, this.tileSize, this.tileSize);
+                // Alternate between tile 0 (light) and tile 1 (dark)
+                const tileIndex = (x + y) % 2 === 0 ? 0 : 1;
+                layer.putTileAt(tileIndex, x, y);
             }
         }
 
-        // Draw the graphics onto the render texture
-        tileTexture.draw(graphics, 0, 0);
+        // Step 6: Enable lighting on the tilemap layer
+        layer.setPipeline('Light2D');
+
+        // Store reference for potential future use
+        this.tileMap = map;
+        this.tileLayer = layer;
+
+        console.log('[CaveScene] createTileGrid() complete - Tilemap with automatic chunking enabled');
+    }
+
+    /**
+     * Create tileset texture for the tilemap (Optimization #2)
+     * Generates a small texture with 2 tile variants for checkerboard pattern
+     */
+    createTilesetTexture() {
+        // Create graphics object to draw tiles
+        const graphics = this.make.graphics({ x: 0, y: 0, add: false });
+
+        // Tile 0: Light gray with border
+        graphics.fillStyle(0x555555, 1);
+        graphics.fillRect(0, 0, this.tileSize, this.tileSize);
+        graphics.lineStyle(1, 0x333333, 0.5);
+        graphics.strokeRect(0, 0, this.tileSize, this.tileSize);
+
+        // Tile 1: Dark gray with border
+        graphics.fillStyle(0x444444, 1);
+        graphics.fillRect(this.tileSize, 0, this.tileSize, this.tileSize);
+        graphics.lineStyle(1, 0x333333, 0.5);
+        graphics.strokeRect(this.tileSize, 0, this.tileSize, this.tileSize);
+
+        // Generate texture from graphics (2 tiles side by side)
+        graphics.generateTexture('cave-tileset', this.tileSize * 2, this.tileSize);
         graphics.destroy();
 
-        // Enable lighting on the tile texture
-        tileTexture.setPipeline('Light2D');
-
-        console.log('[CaveScene] createTileGrid() complete - lighting enabled, origin set to (0, 0)');
+        console.log('[CaveScene] Tileset texture created: 2 tiles @', this.tileSize, 'x', this.tileSize);
     }
 
     createLanternSystem(worldWidth, worldHeight) {
@@ -601,8 +625,8 @@ export class CaveScene extends Scene {
         const worldHeight = this.gridHeight * this.tileSize;
         const padding = this.tileSize * 3; // Keep enemies away from edges
 
-        // Spawn 15 enemies (Phase 4: ~1:3 enemy-to-player ratio for 50 players)
-        const enemyCount = 15;
+        // Spawn enemies (scaled for map size)
+        const enemyCount = this.numEnemies || 15;
         for (let i = 0; i < enemyCount; i++) {
             // Generate random position within world bounds, with padding
             // Also ensure they spawn at least a certain distance from the player
@@ -691,8 +715,8 @@ export class CaveScene extends Scene {
     }
 
     /**
-     * Update spatial partition with all alive players
-     * Called each frame for efficient spatial queries by bot AI
+     * Update spatial partition with all alive entities
+     * Called each frame for efficient spatial queries by bot AI (Phase 6: Optimization #1)
      */
     updateSpatialPartition() {
         // Clear previous frame's data
@@ -700,11 +724,27 @@ export class CaveScene extends Scene {
 
         // Insert all alive players
         this.playerManager.getAlivePlayers().forEach(player => {
-            this.spatialPartition.insert(player);
+            this.spatialPartition.insert(player, 'player');
         });
 
-        // Note: We don't insert enemies/pickups here since bots use separate
-        // methods (this.scene.enemies, this.scene.oilPickups) to find those
+        // Insert all active enemies (Optimization #1: enable spatial queries)
+        if (this.enemies) {
+            this.enemies.getChildren().forEach(enemy => {
+                if (enemy.active) {
+                    this.spatialPartition.insert(enemy, 'enemy');
+                }
+            });
+        }
+
+        // Insert all active oil pickups (Optimization #1: enable spatial queries)
+        if (this.oilPickupManager) {
+            const activePickups = this.oilPickupManager.getActiveSprites();
+            activePickups.forEach(pickup => {
+                if (pickup.active && pickup.visible) {
+                    this.spatialPartition.insert(pickup, 'pickup');
+                }
+            });
+        }
     }
 
     /**

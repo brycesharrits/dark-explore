@@ -84,17 +84,24 @@ export class BotPlayer extends BasePlayer {
 
     /**
      * Find the nearest oil pickup within vision radius
+     * Optimization #1: Uses spatial partition instead of O(n) scan
      */
     findNearestOil() {
-        const oilPickups = this.scene.oilPickups;
-        if (!oilPickups) return null;
+        // Use spatial partition for efficient O(log n) query
+        const nearbyPickups = this.scene.spatialPartition.queryCircle(
+            this.x,
+            this.y,
+            this.visionRadius,
+            'pickup' // Only query pickups
+        );
 
+        if (nearbyPickups.length === 0) return null;
+
+        // Find closest pickup from candidates
         let nearest = null;
         let minDistance = this.visionRadius;
 
-        oilPickups.getChildren().forEach(pickup => {
-            if (!pickup.active || !pickup.visible) return;
-
+        nearbyPickups.forEach(pickup => {
             const dist = Phaser.Math.Distance.Between(
                 this.x, this.y,
                 pickup.x, pickup.y
@@ -111,17 +118,24 @@ export class BotPlayer extends BasePlayer {
 
     /**
      * Find the nearest enemy within vision radius
+     * Optimization #1: Uses spatial partition instead of O(n) scan
      */
     findNearestEnemy() {
-        const enemies = this.scene.enemies;
-        if (!enemies) return null;
+        // Use spatial partition for efficient O(log n) query
+        const nearbyEnemies = this.scene.spatialPartition.queryCircle(
+            this.x,
+            this.y,
+            this.visionRadius,
+            'enemy' // Only query enemies
+        );
 
+        if (nearbyEnemies.length === 0) return null;
+
+        // Find closest enemy from candidates
         let nearest = null;
         let minDistance = this.visionRadius;
 
-        enemies.getChildren().forEach(enemy => {
-            if (!enemy.active) return;
-
+        nearbyEnemies.forEach(enemy => {
             const dist = Phaser.Math.Distance.Between(
                 this.x, this.y,
                 enemy.x, enemy.y
@@ -138,26 +152,19 @@ export class BotPlayer extends BasePlayer {
 
     /**
      * Check if an enemy is within danger radius
+     * Optimization #1: Uses spatial partition instead of O(n) scan
      */
     isEnemyNearby() {
-        const enemies = this.scene.enemies;
-        if (!enemies) return false;
+        // Use spatial partition for efficient O(log n) query
+        const nearbyEnemies = this.scene.spatialPartition.queryCircle(
+            this.x,
+            this.y,
+            this.dangerRadius,
+            'enemy' // Only query enemies
+        );
 
-        const enemiesArray = enemies.getChildren();
-        for (let enemy of enemiesArray) {
-            if (!enemy.active) continue;
-
-            const dist = Phaser.Math.Distance.Between(
-                this.x, this.y,
-                enemy.x, enemy.y
-            );
-
-            if (dist < this.dangerRadius) {
-                return enemy;
-            }
-        }
-
-        return null;
+        // Return first enemy found (any enemy in danger radius is a threat)
+        return nearbyEnemies.length > 0 ? nearbyEnemies[0] : null;
     }
 
     /**

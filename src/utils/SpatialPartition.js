@@ -25,12 +25,18 @@ export class SpatialPartition {
     /**
      * Insert an entity into the quadtree
      * @param {Object} entity - Entity with x, y properties
+     * @param {string} entityType - Type identifier ('player', 'enemy', 'pickup')
      * @returns {boolean} - True if inserted successfully
      */
-    insert(entity) {
+    insert(entity, entityType = 'unknown') {
         // Check if entity is within bounds
         if (!this.contains(entity)) {
             return false;
+        }
+
+        // Store entity type metadata (for filtering queries)
+        if (!entity._spatialType) {
+            entity._spatialType = entityType;
         }
 
         // If we have space and haven't divided, add it here
@@ -45,10 +51,10 @@ export class SpatialPartition {
         }
 
         // Try to insert into one of the children
-        if (this.northeast.insert(entity)) return true;
-        if (this.northwest.insert(entity)) return true;
-        if (this.southeast.insert(entity)) return true;
-        if (this.southwest.insert(entity)) return true;
+        if (this.northeast.insert(entity, entityType)) return true;
+        if (this.northwest.insert(entity, entityType)) return true;
+        if (this.southeast.insert(entity, entityType)) return true;
+        if (this.southwest.insert(entity, entityType)) return true;
 
         // Should never reach here if bounds checking is correct
         return false;
@@ -140,9 +146,10 @@ export class SpatialPartition {
      * @param {number} centerX - Center X coordinate
      * @param {number} centerY - Center Y coordinate
      * @param {number} radius - Search radius
+     * @param {string} entityType - Optional: filter by entity type ('player', 'enemy', 'pickup')
      * @returns {Array} - Array of entities within radius
      */
-    queryCircle(centerX, centerY, radius, found = []) {
+    queryCircle(centerX, centerY, radius, entityType = null) {
         // Create bounding box for the circle
         const range = {
             x: centerX - radius,
@@ -154,8 +161,14 @@ export class SpatialPartition {
         // Get entities in bounding box
         const candidates = this.query(range);
 
-        // Filter to only those actually within circle
+        // Filter to only those actually within circle and matching type (if specified)
         return candidates.filter(entity => {
+            // Check entity type if filtering is requested
+            if (entityType && entity._spatialType !== entityType) {
+                return false;
+            }
+
+            // Check if within circular radius
             const dx = entity.x - centerX;
             const dy = entity.y - centerY;
             const distSq = dx * dx + dy * dy;
