@@ -28,13 +28,13 @@ export class CaveScene extends Scene {
         this.maxOil = 100; // Maximum oil capacity
         this.currentOil = 100; // Current oil level (starts full)
         this.oilDepletionRate = 10; // Oil units consumed per second - 2 is default
-        this.maxLightRadius = 240; // Maximum light radius in pixels
+        this.maxLightRadius = 290; // Maximum light radius in pixels (+21% from original 240)
         this.minLightRadius = 20; // Minimum light radius before game over (legacy - used for calculations)
-        this.minRadiusBeforeDim = 80; // Minimum radius before dimming starts (circle stops shrinking here)
+        this.minRadiusBeforeDim = 97; // Minimum radius before dimming starts (+21% from original 80)
         this.maxLightIntensity = 1.5; // Maximum light intensity
 
         // Oil pickup properties (Phase 5: managed by OilPickupManager)
-        this.numOilPickups = 86; // Number of oil pickups (scaled for 200×200 map + 20% increase)
+        this.numOilPickups = 110; // Number of oil pickups (scaled for 200×200 map + more common)
         this.oilPickupManager = null; // Manager for oil pickups with respawn
 
         // Power-up properties
@@ -537,9 +537,9 @@ export class CaveScene extends Scene {
             this.startText = null;
         }
 
-        // Spawn bots (Phase 3: spawn 49 bots for 50 total players)
+        // Spawn bots (99 bots for 100 total players)
         console.log('[CaveScene] Spawning bots...');
-        this.playerManager.spawnBots(49, 0.3); // 49 bots (30% smart, 70% dumb) + 1 human = 50 total
+        this.playerManager.spawnBots(99, 0.3); // 99 bots (30% smart, 70% dumb) + 1 human = 100 total
 
         // Initialize elimination tracker with total player count (Phase 6)
         const totalPlayers = this.playerManager.players.length;

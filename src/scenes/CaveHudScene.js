@@ -79,7 +79,7 @@ export class CaveHudScene extends Scene {
         this.playersAliveText = this.add.text(
             padding,
             padding + barHeight + 40,
-            'Players Alive: 50/50',
+            'Players Alive: 100/100',
             {
                 fontSize: '16px',
                 color: '#00ff00',
@@ -97,8 +97,13 @@ export class CaveHudScene extends Scene {
         // Global effect indicators - positioned in top-left
         this.timeWarpIcon = null;
         this.timeWarpTimer = null;
+        this.timeWarpTimerEvent = null; // Store timer event reference
         this.fullVisionIcon = null;
         this.fullVisionTimer = null;
+        this.fullVisionTimerEvent = null; // Store timer event reference
+
+        // Oil bar pulse animation (when critical/red)
+        this.oilBarPulseTween = null;
     }
 
     update() {
@@ -117,10 +122,13 @@ export class CaveHudScene extends Scene {
             // Change color based on oil level
             if (oilPercent > 50) {
                 this.oilBar.setFillStyle(0xffaa00); // Orange
+                this.stopOilBarPulse(); // Stop pulse if it was active
             } else if (oilPercent > 25) {
                 this.oilBar.setFillStyle(0xff6600); // Dark orange
+                this.stopOilBarPulse(); // Stop pulse if it was active
             } else {
                 this.oilBar.setFillStyle(0xff0000); // Red
+                this.startOilBarPulse(); // Start pulse animation when critical
             }
         }
 
@@ -134,7 +142,7 @@ export class CaveHudScene extends Scene {
         if (this.caveScene && this.caveScene.eliminationTracker) {
             const tracker = this.caveScene.eliminationTracker;
             const playersAlive = tracker.getAlivePlayers();
-            const totalPlayers = tracker.totalPlayers || 50;
+            const totalPlayers = tracker.totalPlayers || 100;
             this.playersAliveText.setText(`Players Alive: ${playersAlive}/${totalPlayers}`);
 
             // Change color based on how many players are left
@@ -153,10 +161,10 @@ export class CaveHudScene extends Scene {
      * @param {number} duration - Duration in milliseconds
      */
     showTimeWarpEffect(duration) {
-        // Remove existing icon if any
-        if (this.timeWarpIcon) {
-            this.timeWarpIcon.destroy();
-        }
+        console.log(`[CaveHudScene] showTimeWarpEffect called with duration: ${duration}ms`);
+
+        // Clean up any existing time warp indicator first
+        this.hideTimeWarpEffect();
 
         // Create time warp icon (positioned top-left, under players alive text)
         const iconSize = 32;
@@ -189,12 +197,13 @@ export class CaveHudScene extends Scene {
         graphics.lineTo(iconSize / 2 + 6, iconSize / 2); // Minute hand (right)
         graphics.stroke();
 
-        // Generate texture
-        graphics.generateTexture('timewarp-hud-icon', iconSize, iconSize);
+        // Generate texture with unique name to avoid collisions
+        const textureName = `timewarp-hud-icon-${Date.now()}`;
+        graphics.generateTexture(textureName, iconSize, iconSize);
         graphics.destroy();
 
         // Create sprite
-        this.timeWarpIcon = this.add.image(x, y, 'timewarp-hud-icon');
+        this.timeWarpIcon = this.add.image(x, y, textureName);
         this.timeWarpIcon.setOrigin(0.5, 0);
         this.timeWarpIcon.setScrollFactor(0);
         this.timeWarpIcon.setDepth(95); // Above most UI
@@ -229,7 +238,7 @@ export class CaveHudScene extends Scene {
 
         // Update timer countdown
         const startTime = Date.now();
-        const timerInterval = this.time.addEvent({
+        this.timeWarpTimerEvent = this.time.addEvent({
             delay: 100, // Update every 100ms
             callback: () => {
                 const elapsed = Date.now() - startTime;
@@ -240,8 +249,9 @@ export class CaveHudScene extends Scene {
                     this.timeWarpTimer.setText(`${seconds}s`);
                 }
 
-                if (remaining <= 0) {
-                    timerInterval.remove();
+                if (remaining <= 0 && this.timeWarpTimerEvent) {
+                    this.timeWarpTimerEvent.remove();
+                    this.timeWarpTimerEvent = null;
                 }
             },
             loop: true
@@ -254,27 +264,39 @@ export class CaveHudScene extends Scene {
      * Hide time warp effect indicator
      */
     hideTimeWarpEffect() {
-        if (this.timeWarpIcon) {
-            // Fade out animation
-            this.tweens.add({
-                targets: [this.timeWarpIcon, this.timeWarpTimer],
-                alpha: 0,
-                duration: 300,
-                ease: 'Linear',
-                onComplete: () => {
-                    if (this.timeWarpIcon) {
-                        this.timeWarpIcon.destroy();
-                        this.timeWarpIcon = null;
-                    }
-                    if (this.timeWarpTimer) {
-                        this.timeWarpTimer.destroy();
-                        this.timeWarpTimer = null;
-                    }
-                }
-            });
+        // Stop the timer event first
+        if (this.timeWarpTimerEvent) {
+            this.timeWarpTimerEvent.remove();
+            this.timeWarpTimerEvent = null;
         }
 
-        console.log('[CaveHudScene] Time warp effect indicator hidden');
+        if (this.timeWarpIcon || this.timeWarpTimer) {
+            // Fade out animation
+            const targets = [];
+            if (this.timeWarpIcon) targets.push(this.timeWarpIcon);
+            if (this.timeWarpTimer) targets.push(this.timeWarpTimer);
+
+            if (targets.length > 0) {
+                this.tweens.add({
+                    targets: targets,
+                    alpha: 0,
+                    duration: 300,
+                    ease: 'Linear',
+                    onComplete: () => {
+                        if (this.timeWarpIcon) {
+                            this.timeWarpIcon.destroy();
+                            this.timeWarpIcon = null;
+                        }
+                        if (this.timeWarpTimer) {
+                            this.timeWarpTimer.destroy();
+                            this.timeWarpTimer = null;
+                        }
+                    }
+                });
+            }
+
+            console.log('[CaveHudScene] Time warp effect indicator hidden');
+        }
     }
 
     /**
@@ -282,10 +304,10 @@ export class CaveHudScene extends Scene {
      * @param {number} duration - Duration in milliseconds
      */
     showFullVisionEffect(duration) {
-        // Remove existing icon if any
-        if (this.fullVisionIcon) {
-            this.fullVisionIcon.destroy();
-        }
+        console.log(`[CaveHudScene] showFullVisionEffect called with duration: ${duration}ms`);
+
+        // Clean up any existing full vision indicator first
+        this.hideFullVisionEffect();
 
         // Create full vision icon (positioned below time warp icon)
         const iconSize = 32;
@@ -316,12 +338,13 @@ export class CaveHudScene extends Scene {
         graphics.fillStyle(0xffffff, 1);
         graphics.fillCircle(iconSize / 2 + 1, iconSize / 2 - 1, 1.5);
 
-        // Generate texture
-        graphics.generateTexture('fullvision-hud-icon', iconSize, iconSize);
+        // Generate texture with unique name to avoid collisions
+        const textureName = `fullvision-hud-icon-${Date.now()}`;
+        graphics.generateTexture(textureName, iconSize, iconSize);
         graphics.destroy();
 
         // Create sprite
-        this.fullVisionIcon = this.add.image(x, y, 'fullvision-hud-icon');
+        this.fullVisionIcon = this.add.image(x, y, textureName);
         this.fullVisionIcon.setOrigin(0.5, 0);
         this.fullVisionIcon.setScrollFactor(0);
         this.fullVisionIcon.setDepth(95); // Above most UI
@@ -356,7 +379,7 @@ export class CaveHudScene extends Scene {
 
         // Update timer countdown
         const startTime = Date.now();
-        const timerInterval = this.time.addEvent({
+        this.fullVisionTimerEvent = this.time.addEvent({
             delay: 100, // Update every 100ms
             callback: () => {
                 const elapsed = Date.now() - startTime;
@@ -367,8 +390,9 @@ export class CaveHudScene extends Scene {
                     this.fullVisionTimer.setText(`${seconds}s`);
                 }
 
-                if (remaining <= 0) {
-                    timerInterval.remove();
+                if (remaining <= 0 && this.fullVisionTimerEvent) {
+                    this.fullVisionTimerEvent.remove();
+                    this.fullVisionTimerEvent = null;
                 }
             },
             loop: true
@@ -381,26 +405,75 @@ export class CaveHudScene extends Scene {
      * Hide full vision effect indicator
      */
     hideFullVisionEffect() {
-        if (this.fullVisionIcon) {
-            // Fade out animation
-            this.tweens.add({
-                targets: [this.fullVisionIcon, this.fullVisionTimer],
-                alpha: 0,
-                duration: 300,
-                ease: 'Linear',
-                onComplete: () => {
-                    if (this.fullVisionIcon) {
-                        this.fullVisionIcon.destroy();
-                        this.fullVisionIcon = null;
-                    }
-                    if (this.fullVisionTimer) {
-                        this.fullVisionTimer.destroy();
-                        this.fullVisionTimer = null;
-                    }
-                }
-            });
+        // Stop the timer event first
+        if (this.fullVisionTimerEvent) {
+            this.fullVisionTimerEvent.remove();
+            this.fullVisionTimerEvent = null;
         }
 
-        console.log('[CaveHudScene] Full vision effect indicator hidden');
+        if (this.fullVisionIcon || this.fullVisionTimer) {
+            // Fade out animation
+            const targets = [];
+            if (this.fullVisionIcon) targets.push(this.fullVisionIcon);
+            if (this.fullVisionTimer) targets.push(this.fullVisionTimer);
+
+            if (targets.length > 0) {
+                this.tweens.add({
+                    targets: targets,
+                    alpha: 0,
+                    duration: 300,
+                    ease: 'Linear',
+                    onComplete: () => {
+                        if (this.fullVisionIcon) {
+                            this.fullVisionIcon.destroy();
+                            this.fullVisionIcon = null;
+                        }
+                        if (this.fullVisionTimer) {
+                            this.fullVisionTimer.destroy();
+                            this.fullVisionTimer = null;
+                        }
+                    }
+                });
+            }
+
+            console.log('[CaveHudScene] Full vision effect indicator hidden');
+        }
+    }
+
+    /**
+     * Start oil bar pulse animation when critical (< 25%)
+     */
+    startOilBarPulse() {
+        // Don't start if already pulsing
+        if (this.oilBarPulseTween) {
+            return;
+        }
+
+        // Pulse animation - scale the entire oil bar container
+        this.oilBarPulseTween = this.tweens.add({
+            targets: [this.oilBarBg, this.oilBar, this.oilBarBorder, this.oilText],
+            scaleX: { from: 1, to: 1.08 },
+            scaleY: { from: 1, to: 1.15 },
+            duration: 500,
+            yoyo: true,
+            repeat: -1,
+            ease: 'Sine.easeInOut'
+        });
+    }
+
+    /**
+     * Stop oil bar pulse animation
+     */
+    stopOilBarPulse() {
+        if (this.oilBarPulseTween) {
+            this.oilBarPulseTween.remove();
+            this.oilBarPulseTween = null;
+
+            // Reset scale to normal
+            this.oilBarBg.setScale(1);
+            this.oilBar.setScale(1);
+            this.oilBarBorder.setScale(1);
+            this.oilText.setScale(1);
+        }
     }
 }
