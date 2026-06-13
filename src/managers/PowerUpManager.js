@@ -28,15 +28,23 @@ export class PowerUpManager {
         const worldWidth = this.scene.gridWidth * this.scene.tileSize;
         const worldHeight = this.scene.gridHeight * this.scene.tileSize;
         const padding = this.scene.tileSize * 3;
+        const powerUpRadius = 12; // sprite half-width
 
         for (let i = 0; i < count; i++) {
-            // Generate random position (ensure it's on walkable tiles)
+            // Generate random position fully inside the reachable area
             let x, y, attempts = 0;
+            let valid = false;
             do {
                 x = Phaser.Math.Between(padding, worldWidth - padding);
                 y = Phaser.Math.Between(padding, worldHeight - padding);
                 attempts++;
-            } while (attempts < 500 && this.isWallAt(x, y));
+                if (this.scene.isFootprintReachable(x, y, powerUpRadius)) {
+                    valid = true;
+                    break;
+                }
+            } while (attempts < 500);
+
+            if (!valid) continue;
 
             // Select random power-up type (weighted)
             const powerUpType = this.selectRandomType();
@@ -130,20 +138,6 @@ export class PowerUpManager {
         sprite.setDepth(15); // Above pickups
 
         return sprite;
-    }
-
-    /**
-     * Check if position is on a wall tile
-     */
-    isWallAt(x, y) {
-        if (!this.scene.tileMap) return false;
-
-        const tileX = Math.floor(x / this.scene.tileSize);
-        const tileY = Math.floor(y / this.scene.tileSize);
-        const tile = this.scene.tileLayer.getTileAt(tileX, tileY);
-
-        // Tile 2 is wall
-        return tile && tile.index === 2;
     }
 
     /**

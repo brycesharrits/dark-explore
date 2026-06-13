@@ -1,6 +1,5 @@
 import seedrandom from 'seedrandom';
 import { SERVER_CONFIG } from '../config/ServerConfig.js';
-import { PhysicsResolver } from './PhysicsResolver.js';
 
 const { TILE_SIZE, GRID_WIDTH, GRID_HEIGHT, PICKUP_COUNT, POWER_UP_COUNT, POWER_UP_TYPES } = SERVER_CONFIG;
 
@@ -61,26 +60,7 @@ export class WorldGenerator {
         // --- Connect rooms with L-shaped corridors ---
         const corridorWidth = 2;
         for (let i = 0; i < rooms.length - 1; i++) {
-            const a = rooms[i];
-            const b = rooms[i + 1];
-
-            // Horizontal corridor
-            const startX = Math.min(a.cx, b.cx);
-            const endX = Math.max(a.cx, b.cx);
-            for (let x = startX; x <= endX; x++) {
-                for (let dy = -Math.floor(corridorWidth / 2); dy <= Math.floor(corridorWidth / 2); dy++) {
-                    set(x, a.cy + dy, 0);
-                }
-            }
-
-            // Vertical corridor
-            const startY = Math.min(a.cy, b.cy);
-            const endY = Math.max(a.cy, b.cy);
-            for (let y = startY; y <= endY; y++) {
-                for (let dx = -Math.floor(corridorWidth / 2); dx <= Math.floor(corridorWidth / 2); dx++) {
-                    set(b.cx + dx, y, 0);
-                }
-            }
+            WorldGenerator._carveCorridor(set, rooms[i].cx, rooms[i].cy, rooms[i + 1].cx, rooms[i + 1].cy, corridorWidth);
         }
 
         // --- Clear center starting area ---
@@ -93,14 +73,33 @@ export class WorldGenerator {
             }
         }
 
+        // --- Join center to room chain so the starting area isn't an island ---
+        if (rooms.length > 0) {
+            let nearest = rooms[0];
+            let bestDist = Infinity;
+            for (const room of rooms) {
+                const dx = room.cx - centerX;
+                const dy = room.cy - centerY;
+                const d = dx * dx + dy * dy;
+                if (d < bestDist) {
+                    bestDist = d;
+                    nearest = room;
+                }
+            }
+            WorldGenerator._carveCorridor(set, centerX, centerY, nearest.cx, nearest.cy, corridorWidth);
+        }
+
+        // --- Reachability mask from the player's starting position ---
+        const reachable = WorldGenerator._floodFillReachable(wallGrid, centerX, centerY);
+
         // --- Generate player spawns (20 is plenty for BOT_FILL_TO=10) ---
-        const playerSpawns = WorldGenerator._generateSpawnPositions(wallGrid, between, 20);
+        const playerSpawns = WorldGenerator._generateSpawnPositions(wallGrid, reachable, between, 20);
 
         // --- Generate oil pickup positions ---
-        const oilPickups = WorldGenerator._generatePickupPositions(wallGrid, rng, PICKUP_COUNT);
+        const oilPickups = WorldGenerator._generatePickupPositions(wallGrid, reachable, rng, PICKUP_COUNT);
 
         // --- Generate power-up positions ---
-        const powerUps = WorldGenerator._generatePowerUpPositions(wallGrid, rng, POWER_UP_COUNT);
+        const powerUps = WorldGenerator._generatePowerUpPositions(wallGrid, reachable, rng, POWER_UP_COUNT);
 
         // Strip cx/cy from rooms before sending to client (not needed)
         const clientRooms = rooms.map(r => ({ x: r.x, y: r.y, width: r.width, height: r.height }));
@@ -115,12 +114,84 @@ export class WorldGenerator {
         };
     }
 
-    static _generateSpawnPositions(wallGrid, between, count) {
+    /**
+     * Carve an L-shaped corridor between two tile coordinates.
+     * @param {Function} set - (tx, ty, val) closure that mutates the wall grid
+     */
+    static _carveCorridor(set, x1, y1, x2, y2, width = 2) {
+        const half = Math.floor(width / 2);
+
+        const startX = Math.min(x1, x2);
+        const endX = Math.max(x1, x2);
+        for (let x = startX; x <= endX; x++) {
+            for (let dy = -half; dy <= half; dy++) {
+                set(x, y1 + dy, 0);
+            }
+        }
+
+        const startY = Math.min(y1, y2);
+        const endY = Math.max(y1, y2);
+        for (let y = startY; y <= endY; y++) {
+            for (let dx = -half; dx <= half; dx++) {
+                set(x2 + dx, y, 0);
+            }
+        }
+    }
+
+    /**
+     * BFS flood-fill from a tile, returning a reachable mask (1 = reachable floor).
+     */
+    static _floodFillReachable(wallGrid, startTx, startTy) {
+        const reachable = new Uint8Array(GRID_WIDTH * GRID_HEIGHT);
+        const idx = (tx, ty) => ty * GRID_WIDTH + tx;
+
+        if (startTx < 0 || startTx >= GRID_WIDTH || startTy < 0 || startTy >= GRID_HEIGHT) return reachable;
+        if (wallGrid[idx(startTx, startTy)] === 1) return reachable;
+
+        const queue = [startTx, startTy];
+        reachable[idx(startTx, startTy)] = 1;
+
+        while (queue.length > 0) {
+            const ty = queue.pop();
+            const tx = queue.pop();
+
+            const neighbors = [[tx + 1, ty], [tx - 1, ty], [tx, ty + 1], [tx, ty - 1]];
+            for (const [nx, ny] of neighbors) {
+                if (nx < 0 || nx >= GRID_WIDTH || ny < 0 || ny >= GRID_HEIGHT) continue;
+                const i = idx(nx, ny);
+                if (reachable[i] || wallGrid[i] === 1) continue;
+                reachable[i] = 1;
+                queue.push(nx, ny);
+            }
+        }
+
+        return reachable;
+    }
+
+    /**
+     * True if the entire footprint (center + 4 corners offset by r) lies on reachable floor.
+     */
+    static _footprintReachable(x, y, r, reachable) {
+        const points = [
+            [x, y],
+            [x - r, y - r], [x + r, y - r],
+            [x - r, y + r], [x + r, y + r]
+        ];
+        for (const [px, py] of points) {
+            const tx = Math.floor(px / TILE_SIZE);
+            const ty = Math.floor(py / TILE_SIZE);
+            if (tx < 0 || tx >= GRID_WIDTH || ty < 0 || ty >= GRID_HEIGHT) return false;
+            if (reachable[ty * GRID_WIDTH + tx] !== 1) return false;
+        }
+        return true;
+    }
+
+    static _generateSpawnPositions(wallGrid, reachable, between, count) {
         const worldW = GRID_WIDTH * TILE_SIZE;
         const worldH = GRID_HEIGHT * TILE_SIZE;
         const padding = TILE_SIZE * 4;
         const minDist = 80;
-        const r = 16; // player radius to check corners
+        const r = 16; // player radius
         const spawns = [];
 
         for (let i = 0; i < count; i++) {
@@ -132,15 +203,7 @@ export class WorldGenerator {
                 y = between(padding, worldH - padding);
                 attempts++;
 
-                // Check center and all 4 corners for wall overlap
-                const corners = [
-                    { x, y },
-                    { x: x - r, y: y - r },
-                    { x: x + r, y: y - r },
-                    { x: x - r, y: y + r },
-                    { x: x + r, y: y + r }
-                ];
-                const onWall = corners.some(c => PhysicsResolver.isWall(c.x, c.y, wallGrid));
+                if (!WorldGenerator._footprintReachable(x, y, r, reachable)) continue;
 
                 const tooClose = spawns.some(s => {
                     const dx = s.x - x;
@@ -148,7 +211,7 @@ export class WorldGenerator {
                     return dx * dx + dy * dy < minDist * minDist;
                 });
 
-                if (!onWall && !tooClose) {
+                if (!tooClose) {
                     valid = true;
                     break;
                 }
@@ -162,42 +225,56 @@ export class WorldGenerator {
         return spawns;
     }
 
-    static _generatePickupPositions(wallGrid, rng, count) {
+    static _generatePickupPositions(wallGrid, reachable, rng, count) {
         const worldW = GRID_WIDTH * TILE_SIZE;
         const worldH = GRID_HEIGHT * TILE_SIZE;
         const padding = TILE_SIZE * 2;
+        const r = 8; // pickup sprite half-width
         const pickups = [];
 
         for (let i = 0; i < count; i++) {
             let x, y, attempts = 0;
+            let valid = false;
             do {
                 x = Math.floor(rng() * (worldW - padding * 2)) + padding;
                 y = Math.floor(rng() * (worldH - padding * 2)) + padding;
                 attempts++;
-            } while (attempts < 500 && PhysicsResolver.isWall(x, y, wallGrid));
+                if (WorldGenerator._footprintReachable(x, y, r, reachable)) {
+                    valid = true;
+                    break;
+                }
+            } while (attempts < 500);
 
-            pickups.push({ id: i, x, y });
+            if (valid) pickups.push({ id: i, x, y });
         }
 
         return pickups;
     }
 
-    static _generatePowerUpPositions(wallGrid, rng, count) {
+    static _generatePowerUpPositions(wallGrid, reachable, rng, count) {
         const worldW = GRID_WIDTH * TILE_SIZE;
         const worldH = GRID_HEIGHT * TILE_SIZE;
         const padding = TILE_SIZE * 3;
+        const r = 12; // power-up sprite half-width
         const powerUps = [];
 
         for (let i = 0; i < count; i++) {
             let x, y, attempts = 0;
+            let valid = false;
             do {
                 x = Math.floor(rng() * (worldW - padding * 2)) + padding;
                 y = Math.floor(rng() * (worldH - padding * 2)) + padding;
                 attempts++;
-            } while (attempts < 500 && PhysicsResolver.isWall(x, y, wallGrid));
+                if (WorldGenerator._footprintReachable(x, y, r, reachable)) {
+                    valid = true;
+                    break;
+                }
+            } while (attempts < 500);
 
-            const type = WorldGenerator._selectPowerUpType(rng);
-            powerUps.push({ id: i, x, y, type });
+            if (valid) {
+                const type = WorldGenerator._selectPowerUpType(rng);
+                powerUps.push({ id: i, x, y, type });
+            }
         }
 
         return powerUps;

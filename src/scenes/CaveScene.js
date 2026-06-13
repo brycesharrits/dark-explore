@@ -148,8 +148,14 @@ export class CaveScene extends Scene {
         console.log('[CaveScene] Initializing EliminationFeed...');
         this.eliminationFeed = new EliminationFeed(this);
 
-        // Listen for player elimination events (Phase 6)
+        // Listen for player elimination events. Remove any prior binding first so
+        // restarts within the same session don't accumulate listeners — a duplicate
+        // listener double-counts eliminations and triggers a premature winner.
+        this.events.off('player-eliminated', this.onPlayerEliminated, this);
         this.events.on('player-eliminated', this.onPlayerEliminated, this);
+        this.events.once(Phaser.Scenes.Events.SHUTDOWN, () => {
+            this.events.off('player-eliminated', this.onPlayerEliminated, this);
+        });
 
         // Configure camera to follow player
         console.log('[CaveScene] Configuring camera...');
@@ -328,7 +334,90 @@ export class CaveScene extends Scene {
             }
         }
 
+        // Step 5: Join the center starting area to the room chain so it isn't an island
+        if (roomCenters.length > 0) {
+            let nearest = roomCenters[0];
+            let bestDist = Infinity;
+            for (const c of roomCenters) {
+                const dx = c.x - centerX;
+                const dy = c.y - centerY;
+                const d = dx * dx + dy * dy;
+                if (d < bestDist) {
+                    bestDist = d;
+                    nearest = c;
+                }
+            }
+            this.createCorridor(layer, centerX, centerY, nearest.x, nearest.y);
+        }
+
+        // Step 6: Compute reachability mask via flood-fill from the player's start
+        this._computeReachableMask(layer, centerX, centerY);
+
         console.log(`[CaveScene] Maze generated with ${rooms.length} rooms`);
+    }
+
+    /**
+     * Flood-fill from the player's starting tile to mark every reachable floor tile.
+     * Result stored as Uint8Array on this.reachableMask (1 = reachable).
+     */
+    _computeReachableMask(layer, startTx, startTy) {
+        const w = this.gridWidth;
+        const h = this.gridHeight;
+        const mask = new Uint8Array(w * h);
+
+        const isWallTile = (tx, ty) => {
+            if (tx < 0 || tx >= w || ty < 0 || ty >= h) return true;
+            const tile = layer.getTileAt(tx, ty);
+            return !tile || tile.index === 2;
+        };
+
+        if (isWallTile(startTx, startTy)) {
+            this.reachableMask = mask;
+            return;
+        }
+
+        const queue = [startTx, startTy];
+        mask[startTy * w + startTx] = 1;
+
+        while (queue.length > 0) {
+            const ty = queue.pop();
+            const tx = queue.pop();
+            const neighbors = [[tx + 1, ty], [tx - 1, ty], [tx, ty + 1], [tx, ty - 1]];
+            for (const [nx, ny] of neighbors) {
+                if (nx < 0 || nx >= w || ny < 0 || ny >= h) continue;
+                const idx = ny * w + nx;
+                if (mask[idx] || isWallTile(nx, ny)) continue;
+                mask[idx] = 1;
+                queue.push(nx, ny);
+            }
+        }
+
+        this.reachableMask = mask;
+    }
+
+    /**
+     * True if the entire footprint (center + 4 corners at radius r) is on reachable floor.
+     * Used to gate pickup/power-up/spawn placement so they never appear in walls or
+     * disconnected pockets.
+     */
+    isFootprintReachable(worldX, worldY, radius) {
+        if (!this.reachableMask) return false;
+        const w = this.gridWidth;
+        const h = this.gridHeight;
+        const ts = this.tileSize;
+
+        const points = [
+            [worldX, worldY],
+            [worldX - radius, worldY - radius], [worldX + radius, worldY - radius],
+            [worldX - radius, worldY + radius], [worldX + radius, worldY + radius]
+        ];
+        for (const [px, py] of points) {
+            const tx = Math.floor(px / ts);
+            const ty = Math.floor(py / ts);
+            if (tx < 0 || tx >= w || ty < 0 || ty >= h) return false;
+            if (this.reachableMask[ty * w + tx] !== 1) return false;
+        }
+        return true;
     }
 
     /**
@@ -837,39 +926,52 @@ export class CaveScene extends Scene {
 
         const worldWidth = this.gridWidth * this.tileSize;
         const worldHeight = this.gridHeight * this.tileSize;
-        const padding = this.tileSize * 3; // Keep enemies away from edges
-
-        // Spawn enemies (scaled for map size)
+        const padding = this.tileSize * 3;
+        const enemyRadius = 10; // CaveEnemy visual radius
+        const minDistFromPlayer = 200;
         const enemyCount = this.numEnemies || 15;
+
         for (let i = 0; i < enemyCount; i++) {
-            // Generate random position within world bounds, with padding
-            // Also ensure they spawn at least a certain distance from the player
-            let x, y, distanceFromPlayer;
+            let x, y, attempts = 0;
+            let valid = false;
             do {
                 x = Phaser.Math.Between(padding, worldWidth - padding);
                 y = Phaser.Math.Between(padding, worldHeight - padding);
-                distanceFromPlayer = Phaser.Math.Distance.Between(x, y, this.player.x, this.player.y);
-            } while (distanceFromPlayer < 200); // Keep enemies at least 200 pixels away from player initially
+                attempts++;
 
-            // Create enemy
+                if (!this.isFootprintReachable(x, y, enemyRadius)) continue;
+
+                const distanceFromPlayer = Phaser.Math.Distance.Between(x, y, this.player.x, this.player.y);
+                if (distanceFromPlayer < minDistFromPlayer) continue;
+
+                valid = true;
+                break;
+            } while (attempts < 200);
+
+            if (!valid) continue;
+
             const enemy = new CaveEnemy(this, x, y);
             this.enemies.add(enemy);
-
-            console.log(`[CaveScene] Spawned enemy ${i + 1} at (${x}, ${y}), distance from player: ${distanceFromPlayer.toFixed(0)}`);
         }
 
         console.log(`[CaveScene] Total enemies: ${this.enemies.getLength()}`);
 
-        // Set up collision detection between all players and enemies
+        // Enemies collide with walls
+        if (this.enemyWallCollider) {
+            this.enemyWallCollider.destroy();
+        }
+        this.enemyWallCollider = this.physics.add.collider(this.enemies, this.tileLayer);
+
+        // Enemies vs players (overlap → damage handler)
         this.enemyCollider = this.physics.add.overlap(
-            this.allPlayerSprites || this.player, // Use all players if available, fallback to just human
+            this.allPlayerSprites || this.player,
             this.enemies,
             this.handleEnemyCollision,
             null,
             this
         );
 
-        console.log('[CaveScene] Enemy collision detection enabled for all players');
+        console.log('[CaveScene] Enemy wall + player collisions enabled');
     }
 
     /**

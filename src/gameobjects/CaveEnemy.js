@@ -41,8 +41,12 @@ export class CaveEnemy extends Physics.Arcade.Sprite {
         // Simple wandering AI
         this.changeDirectionTimer += delta;
 
-        // Change direction periodically or randomly
-        if (this.changeDirectionTimer >= this.changeDirectionDelay) {
+        // Reroll direction immediately when wedged against a wall
+        const b = this.body;
+        if (b && (b.blocked.up || b.blocked.down || b.blocked.left || b.blocked.right)) {
+            this.currentDirection = Phaser.Math.Between(0, 7);
+            this.changeDirectionTimer = 0;
+        } else if (this.changeDirectionTimer >= this.changeDirectionDelay) {
             this.changeDirectionTimer = 0;
             this.currentDirection = Phaser.Math.Between(0, 7);
         }

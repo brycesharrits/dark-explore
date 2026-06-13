@@ -33,6 +33,18 @@ export class PlayerManager {
         this.botsPerFrameUpdate = 20; // Update 20 bots per frame
         this.currentBotUpdateIndex = 0; // Track which bots to update this frame
 
+        // Keep alivePlayers in sync with BasePlayer.eliminate(). Players are hidden
+        // but not destroyed on elimination, so the sprite 'destroy' event doesn't
+        // fire — we rely on the scene event instead.
+        this._onPlayerEliminated = (player) => {
+            this.alivePlayers.delete(player);
+            if (!this.deadPlayers.includes(player)) this.deadPlayers.push(player);
+        };
+        scene.events.on('player-eliminated', this._onPlayerEliminated);
+        scene.events.once(Phaser.Scenes.Events.SHUTDOWN, () => {
+            scene.events.off('player-eliminated', this._onPlayerEliminated);
+        });
+
         console.log('[PlayerManager] Initialized');
     }
 
@@ -45,11 +57,6 @@ export class PlayerManager {
         this.humanPlayer = new HumanPlayer(this.scene, x, y);
         this.players.push(this.humanPlayer);
         this.alivePlayers.add(this.humanPlayer);
-
-        // Listen for elimination event
-        this.humanPlayer.on('destroy', () => {
-            this.alivePlayers.delete(this.humanPlayer);
-        });
 
         console.log('[PlayerManager] Human player spawned');
         return this.humanPlayer;
@@ -116,30 +123,36 @@ export class PlayerManager {
         const worldHeight = this.scene.gridHeight * this.scene.tileSize;
         const padding = this.scene.tileSize * 3;
         const minSpawnDistance = 150; // Minimum distance between spawns
+        const botRadius = 16; // bot footprint half-width
 
         // Get existing spawn positions (including human player)
         const existingSpawns = this.players.map(p => ({ x: p.x, y: p.y }));
 
         for (let i = 0; i < count; i++) {
-            // Generate spawn position with minimum distance from other players
+            // Generate spawn position: reachable, not on a wall, far enough from other spawns
             let x, y, attempts = 0;
-            const maxAttempts = 50;
+            const maxAttempts = 200;
+            let valid = false;
 
             do {
                 x = Phaser.Math.Between(padding, worldWidth - padding);
                 y = Phaser.Math.Between(padding, worldHeight - padding);
                 attempts++;
 
-                // Check distance from all existing spawns
+                if (!this.scene.isFootprintReachable(x, y, botRadius)) continue;
+
                 const tooClose = existingSpawns.some(spawn => {
                     const dist = Phaser.Math.Distance.Between(x, y, spawn.x, spawn.y);
                     return dist < minSpawnDistance;
                 });
 
-                if (!tooClose || attempts >= maxAttempts) {
+                if (!tooClose) {
+                    valid = true;
                     break;
                 }
             } while (attempts < maxAttempts);
+
+            if (!valid) continue;
 
             // Create bot (smart or dumb based on ratio)
             const playerId = this.players.length; // ID is based on total player count
@@ -157,11 +170,6 @@ export class PlayerManager {
             this.botPlayers.push(bot);
             this.alivePlayers.add(bot);
             existingSpawns.push({ x, y });
-
-            // Listen for elimination events
-            bot.on('destroy', () => {
-                this.alivePlayers.delete(bot);
-            });
 
             console.log(`[PlayerManager] Spawned ${bot.name} (${isSmartBot ? 'Smart' : 'Dumb'}) at (${x.toFixed(0)}, ${y.toFixed(0)})`);
         }
