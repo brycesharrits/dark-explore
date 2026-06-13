@@ -15,8 +15,8 @@ export class CaveScene extends Scene {
     constructor() {
         super({ key: 'CaveScene' });
         this.tileSize = 32; // Size of each tile in pixels
-        this.gridWidth = 200; // Number of tiles wide (Optimization #2 test: 200×200)
-        this.gridHeight = 200; // Number of tiles tall (Optimization #2 test: 200×200)
+        this.gridWidth = 80; // Number of tiles wide
+        this.gridHeight = 80; // Number of tiles tall
 
         // Game state
         this.gameStarted = false; // Track if game has started
@@ -27,18 +27,18 @@ export class CaveScene extends Scene {
         // Lantern system properties
         this.maxOil = 100; // Maximum oil capacity
         this.currentOil = 100; // Current oil level (starts full)
-        this.oilDepletionRate = 10; // Oil units consumed per second - 2 is default
+        this.oilDepletionRate = 6; // Oil units consumed per second - 2 is default
         this.maxLightRadius = 290; // Maximum light radius in pixels (+21% from original 240)
         this.minLightRadius = 20; // Minimum light radius before game over (legacy - used for calculations)
         this.minRadiusBeforeDim = 97; // Minimum radius before dimming starts (+21% from original 80)
         this.maxLightIntensity = 1.5; // Maximum light intensity
 
         // Oil pickup properties (Phase 5: managed by OilPickupManager)
-        this.numOilPickups = 110; // Number of oil pickups (scaled for 200×200 map + more common)
+        this.numOilPickups = 30; // Number of oil pickups
         this.oilPickupManager = null; // Manager for oil pickups with respawn
 
         // Power-up properties
-        this.numPowerUps = 15; // Number of power-ups (less common than oil)
+        this.numPowerUps = 6; // Number of power-ups (less common than oil)
         this.powerUpManager = null; // Manager for power-ups
 
         // Elimination tracking (Phase 6)
@@ -50,7 +50,7 @@ export class CaveScene extends Scene {
         this.enemySpawnDelay = 5000; // Spawn enemies after 5 seconds (in milliseconds)
         this.enemySpawnTimer = null; // Timer for spawning enemies
         this.enemies = null; // Group to hold enemies
-        this.numEnemies = 60; // Number of enemies (scaled for 200×200 map: 4× larger)
+        this.numEnemies = 15; // Number of enemies
 
         // Debug/testing mode
         this.debugGraphics = null; // Graphics object for debug visualizations
@@ -59,6 +59,11 @@ export class CaveScene extends Scene {
 
         // Full vision power-up indicator
         this.fullVisionIndicatorActive = false; // When true, show light radius circle
+
+        // Multiplayer
+        this.isMultiplayer = false;
+        this.socketManager = null;
+        this.localPlayerId = null;
     }
 
     create() {
@@ -75,6 +80,11 @@ export class CaveScene extends Scene {
 
         // Reset power-up states
         this.fullVisionIndicatorActive = false;
+
+        // Check multiplayer mode from registry
+        this.isMultiplayer = this.game.registry.get('isMultiplayer') || false;
+        this.socketManager = this.game.registry.get('socketManager') || null;
+        this.localPlayerId = null;
 
         // Initialize enemies group
         this.enemies = this.add.group({
@@ -107,9 +117,9 @@ export class CaveScene extends Scene {
         // Convenience reference to human player (for compatibility)
         this.player = this.playerManager.humanPlayer;
 
-        // Enable collision between player and walls
+        // Enable collision between player and walls (stored so setupMultiplayerCollisions can replace it)
         console.log('[CaveScene] Setting up wall collision...');
-        this.physics.add.collider(this.player, this.tileLayer);
+        this.wallCollider = this.physics.add.collider(this.player, this.tileLayer);
 
         // Create the lantern/visibility system
         console.log('[CaveScene] Creating lantern system...');
@@ -118,12 +128,17 @@ export class CaveScene extends Scene {
         // Create oil pickups with respawn system (Phase 5)
         console.log('[CaveScene] Initializing OilPickupManager...');
         this.oilPickupManager = new OilPickupManager(this);
-        this.oilPickupManager.spawnPickups(this.numOilPickups);
+        if (!this.isMultiplayer) {
+            // Solo mode: spawn randomly. MP mode: server provides positions at game_start.
+            this.oilPickupManager.spawnPickups(this.numOilPickups);
+        }
 
         // Create power-ups
         console.log('[CaveScene] Initializing PowerUpManager...');
         this.powerUpManager = new PowerUpManager(this);
-        this.powerUpManager.spawnPowerUps(this.numPowerUps);
+        if (!this.isMultiplayer) {
+            this.powerUpManager.spawnPowerUps(this.numPowerUps);
+        }
 
         // Initialize elimination tracker (Phase 6)
         console.log('[CaveScene] Initializing EliminationTracker...');
@@ -169,10 +184,11 @@ export class CaveScene extends Scene {
 
         // Create start screen text
         console.log('[CaveScene] Creating start screen text...');
+        const startMsg = this.isMultiplayer ? 'Connecting to server...' : 'Use arrow keys to begin';
         this.startText = this.add.text(
             20,
             20,
-            'Use arrow keys to begin',
+            startMsg,
             {
                 fontSize: '24px',
                 color: '#ffffff',
@@ -194,6 +210,11 @@ export class CaveScene extends Scene {
             yoyo: true,
             repeat: -1
         });
+
+        // Set up multiplayer socket listeners
+        if (this.isMultiplayer && this.socketManager) {
+            this.setupMultiplayerListeners();
+        }
 
         console.log('[CaveScene] create() complete');
     }
@@ -220,7 +241,8 @@ export class CaveScene extends Scene {
         const layer = map.createBlankLayer('ground', tileset, 0, 0);
 
         // Step 5: Generate maze layout (floor + walls)
-        this.generateMaze(layer);
+        // serverRooms is null in solo mode; set before createTileGrid() in MP mode
+        this.generateMaze(layer, this._pendingServerRooms || null);
 
         // Step 6: Enable collision on wall tiles (tile index 2)
         layer.setCollisionByExclusion([0, 1]); // Everything except floor tiles collides
@@ -236,10 +258,12 @@ export class CaveScene extends Scene {
     }
 
     /**
-     * Generate maze layout with rooms and corridors
-     * Simple procedural generation for performance
+     * Generate maze layout with rooms and corridors.
+     * In multiplayer mode, serverRooms is provided by the server for determinism.
+     * @param {TilemapLayer} layer
+     * @param {Array|null} serverRooms - [{x, y, width, height}, ...] from server, or null for solo
      */
-    generateMaze(layer) {
+    generateMaze(layer, serverRooms = null) {
         console.log('[CaveScene] Generating maze layout...');
 
         // Step 1: Fill entire map with walls
@@ -249,47 +273,51 @@ export class CaveScene extends Scene {
             }
         }
 
-        // Step 2: Create rooms
-        const numRooms = Math.floor((this.gridWidth * this.gridHeight) / 400); // ~1 room per 400 tiles
-        const rooms = [];
-        const minRoomSize = 5;
-        const maxRoomSize = 15;
+        // Step 2: Create or use rooms
+        let rooms;
+        if (serverRooms && serverRooms.length > 0) {
+            // Use server-provided rooms exactly
+            rooms = serverRooms;
+        } else {
+            // Solo mode: generate randomly
+            rooms = [];
+            const numRooms = Math.floor((this.gridWidth * this.gridHeight) / 400);
+            const minRoomSize = 5;
+            const maxRoomSize = 15;
 
-        for (let i = 0; i < numRooms; i++) {
-            const roomWidth = Phaser.Math.Between(minRoomSize, maxRoomSize);
-            const roomHeight = Phaser.Math.Between(minRoomSize, maxRoomSize);
-            const roomX = Phaser.Math.Between(2, this.gridWidth - roomWidth - 2);
-            const roomY = Phaser.Math.Between(2, this.gridHeight - roomHeight - 2);
+            for (let i = 0; i < numRooms; i++) {
+                const roomWidth = Phaser.Math.Between(minRoomSize, maxRoomSize);
+                const roomHeight = Phaser.Math.Between(minRoomSize, maxRoomSize);
+                const roomX = Phaser.Math.Between(2, this.gridWidth - roomWidth - 2);
+                const roomY = Phaser.Math.Between(2, this.gridHeight - roomHeight - 2);
+                rooms.push({ x: roomX, y: roomY, width: roomWidth, height: roomHeight });
+            }
+        }
 
-            // Carve out room with checkerboard floor
-            for (let y = roomY; y < roomY + roomHeight; y++) {
-                for (let x = roomX; x < roomX + roomWidth; x++) {
+        // Carve rooms and compute centers for corridor connection
+        const roomCenters = [];
+        for (const room of rooms) {
+            for (let y = room.y; y < room.y + room.height; y++) {
+                for (let x = room.x; x < room.x + room.width; x++) {
                     const floorTile = (x + y) % 2 === 0 ? 0 : 1;
                     layer.putTileAt(floorTile, x, y);
                 }
             }
-
-            rooms.push({
-                x: roomX + Math.floor(roomWidth / 2),
-                y: roomY + Math.floor(roomHeight / 2),
-                width: roomWidth,
-                height: roomHeight
+            roomCenters.push({
+                x: room.x + Math.floor(room.width / 2),
+                y: room.y + Math.floor(room.height / 2)
             });
         }
 
         // Step 3: Connect rooms with corridors
-        for (let i = 0; i < rooms.length - 1; i++) {
-            const roomA = rooms[i];
-            const roomB = rooms[i + 1];
-
-            // Create L-shaped corridor
-            this.createCorridor(layer, roomA.x, roomA.y, roomB.x, roomB.y);
+        for (let i = 0; i < roomCenters.length - 1; i++) {
+            this.createCorridor(layer, roomCenters[i].x, roomCenters[i].y, roomCenters[i + 1].x, roomCenters[i + 1].y);
         }
 
-        // Step 4: Ensure player starting position is clear (center of map)
+        // Step 4: Ensure center starting area is clear
         const centerX = Math.floor(this.gridWidth / 2);
         const centerY = Math.floor(this.gridHeight / 2);
-        const startingArea = 5; // Clear 5x5 area around center
+        const startingArea = 5;
 
         for (let y = centerY - startingArea; y <= centerY + startingArea; y++) {
             for (let x = centerX - startingArea; x <= centerX + startingArea; x++) {
@@ -386,8 +414,9 @@ export class CaveScene extends Scene {
         // Set very dark ambient light (the cave darkness)
         this.lights.setAmbientColor(0x0a0a0a); // Very dark gray, almost black
 
-        // Create a point light at player position (the lantern)
-        this.lanternLight = this.lights.addLight(0, 0, this.maxLightRadius, 0xffffff, 1.5);
+        // Create a point light at player position (starts off — flickers on when game begins)
+        this.lanternLight = this.lights.addLight(0, 0, 0, 0xffffff, 0);
+        this.lanternLit = false;
 
         console.log('[LANTERN] Lighting system enabled');
         console.log('[LANTERN] Ambient color set to dark');
@@ -412,6 +441,14 @@ export class CaveScene extends Scene {
     }
 
     updateLightMask() {
+        // Don't drive light values while the flicker animation is playing
+        if (!this.lanternLit) {
+            if (this.player) {
+                this.lanternLight.setPosition(this.player.x, this.player.y);
+            }
+            return;
+        }
+
         if (!this.updateLightMaskCount) this.updateLightMaskCount = 0;
         this.updateLightMaskCount++;
 
@@ -473,20 +510,22 @@ export class CaveScene extends Scene {
         }
 
         if (this.player) {
-            // Check if game should start (arrow key pressed while not started)
+            // Check if game should start (solo: arrow key press; MP: server event only)
             if (!this.gameStarted) {
-                const arrowKeyPressed =
-                    this.cursors.up.isDown ||
-                    this.cursors.down.isDown ||
-                    this.cursors.left.isDown ||
-                    this.cursors.right.isDown ||
-                    this.wasd.up.isDown ||
-                    this.wasd.down.isDown ||
-                    this.wasd.left.isDown ||
-                    this.wasd.right.isDown;
+                if (!this.isMultiplayer) {
+                    const arrowKeyPressed =
+                        this.cursors.up.isDown ||
+                        this.cursors.down.isDown ||
+                        this.cursors.left.isDown ||
+                        this.cursors.right.isDown ||
+                        this.wasd.up.isDown ||
+                        this.wasd.down.isDown ||
+                        this.wasd.left.isDown ||
+                        this.wasd.right.isDown;
 
-                if (arrowKeyPressed) {
-                    this.startGame();
+                    if (arrowKeyPressed) {
+                        this.startGame();
+                    }
                 }
 
                 // Still update light position even when not started
@@ -502,11 +541,18 @@ export class CaveScene extends Scene {
             // Update all players through PlayerManager
             this.playerManager.updateAll(this.cursors, this.wasd, delta);
 
-            // Update oil pickups (Phase 5: handle respawn timers and animations)
+            // Send input to server in multiplayer mode
+            if (this.isMultiplayer && this.socketManager) {
+                this.socketManager.sendInput(this.cursors, this.wasd);
+            }
+
+            // Update oil pickups (respawn timers handled by server in MP mode)
             this.oilPickupManager.update(delta);
 
-            // Update power-ups (handle respawn timers and animations)
-            this.powerUpManager.update(delta);
+            // Update power-ups (respawn timers handled by server in MP mode)
+            if (!this.isMultiplayer) {
+                this.powerUpManager.update(delta);
+            }
 
             // For compatibility, sync scene-level variables with human player
             // (These will be removed in later phases)
@@ -516,8 +562,8 @@ export class CaveScene extends Scene {
             // Update the light mask to reflect new position and oil level
             this.updateLightMask();
 
-            // Check if human player was eliminated (handled by BasePlayer now)
-            if (!this.playerManager.isHumanAlive() && !this.gameOver) {
+            // Check if human player was eliminated (solo mode only; MP uses server events)
+            if (!this.isMultiplayer && !this.playerManager.isHumanAlive() && !this.gameOver) {
                 console.log('[CaveScene] Game Over - human player eliminated!');
                 this.handleGameOver();
             }
@@ -527,7 +573,7 @@ export class CaveScene extends Scene {
         this.updateDebugVisuals();
     }
 
-    startGame() {
+    startGame(mpData = null) {
         console.log('[CaveScene] Starting game!');
         this.gameStarted = true;
 
@@ -537,17 +583,42 @@ export class CaveScene extends Scene {
             this.startText = null;
         }
 
-        // Spawn bots (99 bots for 100 total players)
-        console.log('[CaveScene] Spawning bots...');
-        this.playerManager.spawnBots(99, 0.3); // 99 bots (30% smart, 70% dumb) + 1 human = 100 total
+        if (mpData) {
+            // --- Multiplayer mode ---
+            // Teleport player to server-assigned spawn, then snap camera so there's no lerp zoom
+            if (this.player) {
+                this.player.setPosition(mpData.spawnX, mpData.spawnY);
+                this.cameras.main.centerOn(mpData.spawnX, mpData.spawnY);
+            }
 
-        // Initialize elimination tracker with total player count (Phase 6)
-        const totalPlayers = this.playerManager.players.length;
-        this.eliminationTracker.initialize(totalPlayers);
-        console.log(`[CaveScene] Elimination tracker initialized for ${totalPlayers} players`);
+            // Spawn remote players for other humans
+            for (const p of mpData.players) {
+                if (p.id === this.localPlayerId || p.isBot) continue;
+                this.playerManager.spawnRemotePlayer(p.id, p.name, p.x, p.y);
+            }
+
+            // Use server-provided pickup positions (collision set up by setupMultiplayerCollisions below)
+            this.oilPickupManager.spawnAtPositions(mpData.oilPickups);
+
+            const totalPlayers = mpData.players.length;
+            this.eliminationTracker.initialize(totalPlayers);
+            console.log(`[CaveScene] MP: tracker initialized for ${totalPlayers} players`);
+
+        } else {
+            // --- Solo mode ---
+            console.log('[CaveScene] Spawning bots...');
+            this.playerManager.spawnBots(99, 0.3);
+
+            const totalPlayers = this.playerManager.players.length;
+            this.eliminationTracker.initialize(totalPlayers);
+            console.log(`[CaveScene] Elimination tracker initialized for ${totalPlayers} players`);
+        }
 
         // Setup collision detection for all players (human + bots)
         this.setupMultiplayerCollisions();
+
+        // Play lantern flicker effect now that we're at the correct spawn position
+        this.playLanternFlicker();
 
         // Launch the HUD scene
         console.log('[CaveScene] Launching HUD scene...');
@@ -1020,6 +1091,169 @@ export class CaveScene extends Scene {
         if (DebugConfig.isFeatureEnabled('showPlayerNames')) {
             this.updatePlayerNameLabels();
         }
+    }
+
+    // =========================================================================
+    // LANTERN FLICKER
+    // =========================================================================
+
+    /**
+     * Animate the lantern flickering on from darkness.
+     * Uses a sequence of fast tweens to simulate a lantern catching light.
+     * Also plays a synthetic spark/click sound via Web Audio API.
+     */
+    playLanternFlicker() {
+        if (this.lanternLit) return;
+        this.lanternLit = true;
+
+        const light = this.lanternLight;
+        const targetRadius = this.maxLightRadius;
+        const targetIntensity = this.maxLightIntensity;
+
+        // Flicker sequence: radius and intensity pulse quickly then settle
+        const flickers = [
+            { r: targetRadius * 0.6, i: 0.8, t: 60 },
+            { r: 0,                  i: 0,   t: 80 },
+            { r: targetRadius * 0.4, i: 0.5, t: 50 },
+            { r: 0,                  i: 0,   t: 60 },
+            { r: targetRadius * 0.9, i: 1.2, t: 70 },
+            { r: targetRadius * 0.5, i: 0.4, t: 40 },
+            { r: targetRadius,       i: targetIntensity, t: 200 }
+        ];
+
+        let delay = 0;
+        for (const f of flickers) {
+            this.time.delayedCall(delay, () => {
+                light.setRadius(f.r);
+                light.setIntensity(f.i);
+            });
+            delay += f.t;
+        }
+
+        // Play synthetic lantern ignition sound
+        this.playLanternSound();
+    }
+
+    /**
+     * Generate a synthetic lantern-click / spark sound using Web Audio API.
+     */
+    playLanternSound() {
+        try {
+            const ctx = new (window.AudioContext || window.webkitAudioContext)();
+
+            const playClick = (startTime, freq, duration, gain) => {
+                const osc = ctx.createOscillator();
+                const gainNode = ctx.createGain();
+
+                osc.connect(gainNode);
+                gainNode.connect(ctx.destination);
+
+                osc.type = 'sawtooth';
+                osc.frequency.setValueAtTime(freq, startTime);
+                osc.frequency.exponentialRampToValueAtTime(freq * 0.1, startTime + duration);
+
+                gainNode.gain.setValueAtTime(gain, startTime);
+                gainNode.gain.exponentialRampToValueAtTime(0.001, startTime + duration);
+
+                osc.start(startTime);
+                osc.stop(startTime + duration);
+            };
+
+            const now = ctx.currentTime;
+            // A few quick scratchy clicks, then a warm settle
+            playClick(now,        800,  0.05, 0.3);
+            playClick(now + 0.08, 600,  0.04, 0.2);
+            playClick(now + 0.14, 1200, 0.03, 0.15);
+            playClick(now + 0.19, 500,  0.04, 0.25);
+            playClick(now + 0.25, 300,  0.25, 0.4);  // warm settle
+        } catch (e) {
+            // Audio not available — silently skip
+        }
+    }
+
+    // =========================================================================
+    // MULTIPLAYER
+    // =========================================================================
+
+    /**
+     * Set up Socket.IO event listeners for multiplayer mode.
+     * Called once from create() when isMultiplayer is true.
+     */
+    setupMultiplayerListeners() {
+        const sm = this.socketManager;
+
+        sm.on('net:room_joined', (data) => {
+            console.log('[CaveScene] Joined room:', data.roomId);
+            this.localPlayerId = data.playerId;
+            if (this.startText) {
+                this.startText.setText('Waiting for players...');
+            }
+        });
+
+        sm.on('net:lobby_update', (data) => {
+            const count = data.players.length;
+            const cd = data.countdownSeconds != null ? ` (${data.countdownSeconds}s)` : '';
+            if (this.startText) {
+                this.startText.setText(`Lobby: ${count} players${cd}`);
+            }
+        });
+
+        sm.on('net:game_start', (data) => {
+            this.localPlayerId = data.playerId;
+            this._pendingServerRooms = data.rooms;
+            this.startGame(data);
+        });
+
+        sm.on('net:world_snapshot', (data) => {
+            if (!this.gameStarted) return;
+            this.playerManager.applySnapshot(data.players, this.localPlayerId);
+
+            // Apply dirty pickup state changes
+            if (data.oilPickups) {
+                for (const p of data.oilPickups) {
+                    this.oilPickupManager.applyServerState(p.id, p.state);
+                }
+            }
+        });
+
+        sm.on('net:player_eliminated', (data) => {
+            if (!this.gameStarted) return;
+
+            const isLocal = data.playerId === this.localPlayerId;
+
+            if (this.eliminationFeed) {
+                this.eliminationFeed.addElimination(data.playerName, data.reason, data.rank);
+            }
+
+            if (isLocal && !this.gameOver) {
+                // Handle local player elimination
+                if (this.player) {
+                    this.player.state = 'DEAD';
+                    this.player.setVisible(false);
+                    if (this.player.body) this.player.body.enable = false;
+                }
+                this.handleGameOver();
+            }
+        });
+
+        sm.on('net:pickup_collected', (data) => {
+            this.oilPickupManager.applyServerState(data.pickupId, 'COLLECTED');
+        });
+
+        sm.on('net:game_over', (data) => {
+            if (this.gameOver) return;
+
+            if (data.winnerId === this.localPlayerId) {
+                this.victoryAchieved = true;
+                this.handleVictory();
+            } else if (!this.gameOver) {
+                this.handleGameOver();
+            }
+        });
+
+        // Join the lobby after setting up listeners
+        const displayName = 'Player_' + Math.floor(Math.random() * 9999);
+        sm.joinLobby(displayName);
     }
 
     /**

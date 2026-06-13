@@ -200,6 +200,64 @@ export class OilPickupManager {
     }
 
     /**
+     * Spawn pickups at server-provided positions (multiplayer mode).
+     * @param {Array} positions - [{id, x, y}, ...]
+     */
+    spawnAtPositions(positions) {
+        console.log(`[OilPickupManager] Spawning ${positions.length} server-provided pickups`);
+
+        for (const pos of positions) {
+            const graphics = this.scene.make.graphics({ x: 0, y: 0, add: false });
+            graphics.fillStyle(0xff6600, 1);
+            graphics.fillCircle(8, 8, 6);
+            const textureName = `oil-pickup-${pos.id}`;
+            graphics.generateTexture(textureName, 16, 16);
+            graphics.destroy();
+
+            const sprite = this.scene.physics.add.sprite(pos.x, pos.y, textureName);
+            sprite.setPipeline('Light2D');
+            sprite.setDepth(10);
+
+            this.pickups.push({
+                id: pos.id,
+                sprite,
+                initialX: pos.x,
+                initialY: pos.y,
+                state: 'ACTIVE',
+                respawnTimer: 0,
+                oilAmount: this.oilAmount
+            });
+        }
+
+        this.createCollisionGroup();
+        console.log(`[OilPickupManager] Total server pickups: ${this.pickups.length}`);
+    }
+
+    /**
+     * Apply server state for a specific pickup (multiplayer mode).
+     * Called when a dirty pickup update arrives in world_snapshot.
+     * @param {number} id
+     * @param {string} state - 'ACTIVE' | 'COLLECTED'
+     */
+    applyServerState(id, state) {
+        const pickup = this.pickups.find(p => p.id === id);
+        if (!pickup) return;
+
+        if (state === 'COLLECTED' && pickup.state === 'ACTIVE') {
+            pickup.state = 'COLLECTED';
+            pickup.sprite.setVisible(false);
+            pickup.sprite.body.enable = false;
+        } else if (state === 'ACTIVE' && pickup.state === 'COLLECTED') {
+            pickup.state = 'ACTIVE';
+            pickup.sprite.setVisible(true);
+            pickup.sprite.body.enable = true;
+            pickup.sprite.setPosition(pickup.initialX, pickup.initialY);
+            pickup.sprite.setScale(1);
+            pickup.sprite.setAlpha(1);
+        }
+    }
+
+    /**
      * Check if position is on a wall tile
      */
     isWallAt(x, y) {

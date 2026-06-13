@@ -1,6 +1,7 @@
 import { HumanPlayer } from '../gameobjects/HumanPlayer.js';
 import { SmartBot } from '../gameobjects/SmartBot.js';
 import { DumbBot } from '../gameobjects/DumbBot.js';
+import { RemotePlayer } from '../gameobjects/RemotePlayer.js';
 
 /**
  * PlayerManager - Central management for all players (human and bots)
@@ -21,6 +22,9 @@ export class PlayerManager {
 
         // Elimination tracking
         this.eliminationCount = 0;
+
+        // Remote players (multiplayer mode)
+        this.remotePlayers = new Map(); // remoteId -> RemotePlayer
 
         // Update optimization
         this.frameCount = 0;
@@ -49,6 +53,55 @@ export class PlayerManager {
 
         console.log('[PlayerManager] Human player spawned');
         return this.humanPlayer;
+    }
+
+    /**
+     * Spawn a remote player (multiplayer mode).
+     * @param {string} id - socket ID
+     * @param {string} name - display name
+     * @param {number} x - starting x
+     * @param {number} y - starting y
+     */
+    spawnRemotePlayer(id, name, x, y) {
+        if (this.remotePlayers.has(id)) return this.remotePlayers.get(id);
+
+        const remote = new RemotePlayer(this.scene, id, name, x, y);
+        this.remotePlayers.set(id, remote);
+        this.players.push(remote);
+        this.alivePlayers.add(remote);
+
+        // Wall collision
+        this.scene.physics.add.collider(remote, this.scene.tileLayer);
+
+        console.log(`[PlayerManager] Remote player spawned: ${name} (${id})`);
+        return remote;
+    }
+
+    /**
+     * Apply a world_snapshot to all players (multiplayer mode).
+     * @param {Array} snapshotPlayers - array of player snapshot entries from server
+     * @param {string} localPlayerId - this client's socket ID
+     */
+    applySnapshot(snapshotPlayers, localPlayerId) {
+        for (const entry of snapshotPlayers) {
+            if (entry.id === localPlayerId) {
+                // Local player — apply server correction
+                if (this.humanPlayer) {
+                    this.humanPlayer.applyServerState(entry.x, entry.y, entry.oil, entry.speed);
+                }
+            } else {
+                // Remote player — add snapshot for interpolation
+                const remote = this.remotePlayers.get(entry.id);
+                if (remote) {
+                    if (entry.state === 'DEAD' && remote.state !== 'DEAD') {
+                        remote.applyElimination();
+                        this.alivePlayers.delete(remote);
+                    } else {
+                        remote.addSnapshot(entry.x, entry.y, entry.oil, entry.speed, Date.now());
+                    }
+                }
+            }
+        }
     }
 
     /**
@@ -124,6 +177,13 @@ export class PlayerManager {
         // Always update human player every frame
         if (this.humanPlayer && this.humanPlayer.isAlive()) {
             this.humanPlayer.update(cursors, wasd, delta);
+        }
+
+        // Update remote players (interpolation)
+        for (const remote of this.remotePlayers.values()) {
+            if (remote.isAlive()) {
+                remote.update(delta);
+            }
         }
 
         // Staggered bot updates (Phase 3 optimization)

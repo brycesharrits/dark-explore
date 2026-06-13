@@ -7,8 +7,19 @@ import { HudScene } from "./scenes/HudScene";
 import { MainScene } from "./scenes/MainScene";
 import { MenuScene } from "./scenes/MenuScene";
 import { SplashScene } from "./scenes/SplashScene";
+import { SocketManager } from "./network/SocketManager";
 
-// More information about config: https://newdocs.phaser.io/docs/3.70.0/Phaser.Types.Core.GameConfig
+// Detect multiplayer mode via ?mp=1 URL param
+const isMultiplayer = new URLSearchParams(window.location.search).has('mp');
+
+// Create SocketManager instance (shared across all scenes via game.registry)
+const socketManager = new SocketManager();
+
+if (isMultiplayer) {
+    console.log('[main] Multiplayer mode enabled — connecting to server');
+    socketManager.connect();
+}
+
 const config = {
     type: Phaser.AUTO,
     parent: "phaser-container",
@@ -18,8 +29,8 @@ const config = {
     pixelArt: true,
     roundPixel: false,
     max: {
-        width: 1000, //800 originaly
-        height: 1000, //600 originaly
+        width: 1000,
+        height: 1000,
     },
     scale: {
         mode: Phaser.Scale.FIT,
@@ -29,6 +40,12 @@ const config = {
         default: "arcade",
         arcade: {
             gravity: { y: 0 }
+        }
+    },
+    callbacks: {
+        postBoot: (game) => {
+            game.registry.set('socketManager', socketManager);
+            game.registry.set('isMultiplayer', isMultiplayer);
         }
     },
     scene: [

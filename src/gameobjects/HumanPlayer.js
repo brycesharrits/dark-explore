@@ -63,6 +63,28 @@ export class HumanPlayer extends BasePlayer {
     }
 
     /**
+     * Apply authoritative position/state from the server snapshot.
+     * Soft-corrects small drift, hard-snaps large divergence.
+     */
+    applyServerState(serverX, serverY, oil, speed) {
+        const dx = Math.abs(this.x - serverX);
+        const dy = Math.abs(this.y - serverY);
+
+        if (dx > 64 || dy > 64) {
+            // Hard correction — too far off
+            this.setPosition(serverX, serverY);
+        } else if (dx > 8 || dy > 8) {
+            // Soft lerp correction
+            this.x = Phaser.Math.Linear(this.x, serverX, 0.3);
+            this.y = Phaser.Math.Linear(this.y, serverY, 0.3);
+        }
+        // Small differences (< 8px) are ignored to avoid jitter
+
+        this.currentOil = oil;
+        if (speed !== undefined) this.speed = speed;
+    }
+
+    /**
      * Get the player's current grid position
      */
     getGridPosition(tileSize) {

@@ -34,7 +34,7 @@ export class BasePlayer extends Physics.Arcade.Sprite {
         // Oil/fuel system
         this.maxOil = 100;
         this.currentOil = 100;
-        this.oilDepletionRate = 8; // Oil units consumed per second (tuned for longer games)
+        this.oilDepletionRate = 5; // Oil units consumed per second (tuned for longer games)
 
         // Score tracking
         this.score = 0;
