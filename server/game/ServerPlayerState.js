@@ -53,6 +53,7 @@ export class ServerPlayerState {
             y: this.y,
             oil: this.oil,
             speed: this.getEffectiveSpeed(),
+            score: this.score,
             state: this.state,
             lastInputSeq: this.lastProcessedSeq
         };

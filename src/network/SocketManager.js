@@ -16,6 +16,11 @@ export class SocketManager extends EventTarget {
         // Input state tracked each frame
         this._inputSeq = 0;
         this._lastInput = { up: false, down: false, left: false, right: false };
+
+        // Map<eventName, Map<userCallback, wrappedListener>> so off()/removeAll
+        // can locate the exact wrapper that was added by on() — addEventListener
+        // requires the same function reference to remove a listener.
+        this._listenerMap = new Map();
     }
 
     // -----------------------------------------------------------------------
@@ -137,11 +142,38 @@ export class SocketManager extends EventTarget {
     // -----------------------------------------------------------------------
 
     on(eventName, callback) {
-        this.addEventListener(eventName, (e) => callback(e.detail));
+        let inner = this._listenerMap.get(eventName);
+        if (!inner) {
+            inner = new Map();
+            this._listenerMap.set(eventName, inner);
+        }
+        if (inner.has(callback)) return; // already subscribed — idempotent
+        const wrapper = (e) => callback(e.detail);
+        inner.set(callback, wrapper);
+        this.addEventListener(eventName, wrapper);
     }
 
     off(eventName, callback) {
-        this.removeEventListener(eventName, callback);
+        const inner = this._listenerMap.get(eventName);
+        if (!inner) return;
+        const wrapper = inner.get(callback);
+        if (wrapper) {
+            this.removeEventListener(eventName, wrapper);
+            inner.delete(callback);
+        }
+    }
+
+    /**
+     * Remove every listener registered via on(). Call on scene shutdown so
+     * restarting the scene doesn't pile a second set of handlers on top.
+     */
+    removeAllListeners() {
+        for (const [eventName, inner] of this._listenerMap.entries()) {
+            for (const wrapper of inner.values()) {
+                this.removeEventListener(eventName, wrapper);
+            }
+        }
+        this._listenerMap.clear();
     }
 
     _emit(eventName, data) {

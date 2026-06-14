@@ -1,4 +1,5 @@
 import { SERVER_CONFIG } from '../config/ServerConfig.js';
+import { PhysicsResolver } from './PhysicsResolver.js';
 
 const {
     OIL_RESPAWN_DELAY, POWER_UP_RESPAWN_DELAY, OIL_AMOUNT,
@@ -249,35 +250,23 @@ export class ServerGameState {
         for (const enemy of this.enemies) {
             enemy.directionTimer -= dtMs;
             if (enemy.directionTimer <= 0) {
-                // Pick a new random direction
                 const angle = Math.random() * Math.PI * 2;
                 enemy.vx = Math.cos(angle) * ENEMY_SPEED;
                 enemy.vy = Math.sin(angle) * ENEMY_SPEED;
                 enemy.directionTimer = ENEMY_TURN_INTERVAL + Math.random() * 1000;
             }
 
-            // Move
-            enemy.x += enemy.vx * dt;
-            enemy.y += enemy.vy * dt;
+            // Substep movement so enemies can't tunnel through 1-tile walls when
+            // dtMs * ENEMY_SPEED is close to TILE_SIZE.
+            const steps = Math.max(1, Math.ceil((ENEMY_SPEED * dt) / (TILE_SIZE / 2)));
+            const stepDt = dt / steps;
+            for (let s = 0; s < steps; s++) {
+                enemy.x += enemy.vx * stepDt;
+                enemy.y += enemy.vy * stepDt;
 
-            // Bounce off world bounds
-            const worldW = GRID_WIDTH * TILE_SIZE;
-            const worldH = GRID_HEIGHT * TILE_SIZE;
-            if (enemy.x < ENEMY_RADIUS || enemy.x > worldW - ENEMY_RADIUS) {
-                enemy.vx *= -1;
-                enemy.x = Math.max(ENEMY_RADIUS, Math.min(worldW - ENEMY_RADIUS, enemy.x));
-            }
-            if (enemy.y < ENEMY_RADIUS || enemy.y > worldH - ENEMY_RADIUS) {
-                enemy.vy *= -1;
-                enemy.y = Math.max(ENEMY_RADIUS, Math.min(worldH - ENEMY_RADIUS, enemy.y));
-            }
-
-            // Simple wall bounce
-            if (this.wallGrid && this._isWall(enemy.x, enemy.y)) {
-                enemy.vx *= -1;
-                enemy.vy *= -1;
-                enemy.x += enemy.vx * dt * 2;
-                enemy.y += enemy.vy * dt * 2;
+                const { hitX, hitY } = PhysicsResolver.resolve(enemy, this.wallGrid, ENEMY_RADIUS);
+                if (hitX) enemy.vx *= -1;
+                if (hitY) enemy.vy *= -1;
             }
         }
     }
@@ -293,18 +282,37 @@ export class ServerGameState {
         const enemies = [];
         const worldW = GRID_WIDTH * TILE_SIZE;
         const worldH = GRID_HEIGHT * TILE_SIZE;
-        const spawns = worldData.playerSpawns;
+        const r = ENEMY_RADIUS;
 
-        // Spread enemies in areas away from center spawn
+        // Check center + 4 corners of the enemy AABB so we never place an enemy
+        // partially inside a wall (would let it instantly start tunneling).
+        const footprintOk = (x, y) => {
+            if (x - r < 0 || y - r < 0 || x + r > worldW || y + r > worldH) return false;
+            const points = [
+                [x, y],
+                [x - r, y - r], [x + r, y - r],
+                [x - r, y + r], [x + r, y + r]
+            ];
+            for (const [px, py] of points) {
+                if (this._isWall(px, py)) return false;
+            }
+            return true;
+        };
+
         for (let i = 0; i < ENEMY_COUNT; i++) {
             let x, y, attempts = 0;
+            let valid = false;
             do {
                 x = Math.random() * worldW;
                 y = Math.random() * worldH;
                 attempts++;
-                const onWall = this._isWall(x, y);
-                if (!onWall) break;
-            } while (attempts < 100);
+                if (footprintOk(x, y)) {
+                    valid = true;
+                    break;
+                }
+            } while (attempts < 200);
+
+            if (!valid) continue;
 
             const angle = Math.random() * Math.PI * 2;
             enemies.push({
@@ -328,7 +336,8 @@ export class ServerGameState {
         const snapshot = {
             tick: this.tick,
             timestamp: Date.now(),
-            players: Array.from(this.players.values()).map(p => p.toSnapshotEntry())
+            players: Array.from(this.players.values()).map(p => p.toSnapshotEntry()),
+            enemies: this.enemies.map(e => ({ id: e.id, x: e.x, y: e.y }))
         };
 
         if (this.dirtyPickups.size > 0) {

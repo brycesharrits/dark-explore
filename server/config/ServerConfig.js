@@ -4,7 +4,7 @@ export const SERVER_CONFIG = {
     // Room settings
     ROOM_CAPACITY: 10,       // max human players per room
     BOT_FILL_TO: 10,         // always fill to exactly 10 total (humans + bots)
-    COUNTDOWN_SECONDS: 10,   // lobby countdown before game starts
+    COUNTDOWN_SECONDS: 5,    // lobby countdown before game starts
 
     // Tick rate
     TICK_RATE: 20,

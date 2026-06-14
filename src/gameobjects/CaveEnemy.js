@@ -38,6 +38,13 @@ export class CaveEnemy extends Physics.Arcade.Sprite {
     }
 
     update(time, delta) {
+        // In MP mode the server drives position via snapshot — skip local wander
+        // so we don't fight the authoritative state and double-move the enemy.
+        if (this.isServerControlled) {
+            this.setVelocity(0);
+            return;
+        }
+
         // Simple wandering AI
         this.changeDirectionTimer += delta;
 

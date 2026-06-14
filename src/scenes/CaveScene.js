@@ -81,6 +81,12 @@ export class CaveScene extends Scene {
         // Reset power-up states
         this.fullVisionIndicatorActive = false;
 
+        // Drop any MP enemy refs from a previous game-over → restart. Sprites are
+        // destroyed automatically by Phaser scene shutdown, but the Map holding
+        // their refs persists on the scene instance.
+        this._mpEnemyMap = null;
+        this._pendingServerRooms = null;
+
         // Check multiplayer mode from registry
         this.isMultiplayer = this.game.registry.get('isMultiplayer') || false;
         this.socketManager = this.game.registry.get('socketManager') || null;
@@ -246,9 +252,20 @@ export class CaveScene extends Scene {
         // Step 4: Create layer from tileset
         const layer = map.createBlankLayer('ground', tileset, 0, 0);
 
-        // Step 5: Generate maze layout (floor + walls)
-        // serverRooms is null in solo mode; set before createTileGrid() in MP mode
-        this.generateMaze(layer, this._pendingServerRooms || null);
+        // Step 5: Generate maze layout (floor + walls). In MP mode, defer until the
+        // server sends its rooms in 'game_start' — otherwise we'd draw a random
+        // layout that doesn't match the server's spawns/pickups. The layer stays
+        // all-walls (from createBlankLayer's default) until then.
+        if (!this.isMultiplayer) {
+            this.generateMaze(layer, null);
+        } else {
+            // Fill with walls so the layer isn't visually empty while we wait.
+            for (let y = 0; y < this.gridHeight; y++) {
+                for (let x = 0; x < this.gridWidth; x++) {
+                    layer.putTileAt(2, x, y);
+                }
+            }
+        }
 
         // Step 6: Enable collision on wall tiles (tile index 2)
         layer.setCollisionByExclusion([0, 1]); // Everything except floor tiles collides
@@ -713,14 +730,50 @@ export class CaveScene extends Scene {
         console.log('[CaveScene] Launching HUD scene...');
         this.scene.launch('CaveHudScene');
 
-        // Set up timer to spawn enemies after 5 seconds
-        console.log('[CaveScene] Setting up enemy spawn timer...');
-        this.enemySpawnTimer = this.time.delayedCall(
-            this.enemySpawnDelay,
-            this.spawnEnemies,
-            [],
-            this
-        );
+        // Solo mode: spawn local enemies after the configured delay. MP mode:
+        // enemies are rendered from server snapshots (see applyEnemySnapshot),
+        // so we skip the local spawn entirely.
+        if (!this.isMultiplayer) {
+            console.log('[CaveScene] Setting up enemy spawn timer...');
+            this.enemySpawnTimer = this.time.delayedCall(
+                this.enemySpawnDelay,
+                this.spawnEnemies,
+                [],
+                this
+            );
+        }
+    }
+
+    /**
+     * Sync the local enemy group with the server's authoritative enemy list
+     * from a world_snapshot. Adds, updates, or removes CaveEnemy sprites so
+     * what the player sees matches what the server is colliding against.
+     */
+    applyEnemySnapshot(serverEnemies) {
+        if (!serverEnemies) return;
+        if (!this._mpEnemyMap) this._mpEnemyMap = new Map(); // server id -> CaveEnemy
+
+        const seen = new Set();
+        for (const e of serverEnemies) {
+            seen.add(e.id);
+            let sprite = this._mpEnemyMap.get(e.id);
+            if (!sprite) {
+                sprite = new CaveEnemy(this, e.x, e.y);
+                sprite.isServerControlled = true; // disables local wander AI
+                this.enemies.add(sprite);
+                this._mpEnemyMap.set(e.id, sprite);
+            } else {
+                sprite.setPosition(e.x, e.y);
+            }
+        }
+
+        // Remove sprites for server enemies that no longer exist
+        for (const [id, sprite] of this._mpEnemyMap.entries()) {
+            if (!seen.has(id)) {
+                sprite.destroy();
+                this._mpEnemyMap.delete(id);
+            }
+        }
     }
 
     /**
@@ -1028,13 +1081,13 @@ export class CaveScene extends Scene {
 
     // Handle collision between player and enemy
     handleEnemyCollision(playerSprite, enemy) {
-        console.log(`[CaveScene] ${playerSprite.name} hit by enemy!`);
+        // In MP mode the server resolves enemy collisions and emits player_eliminated
+        // events authoritatively — eliminating locally on top of that double-fires.
+        if (this.isMultiplayer) return;
 
-        // Eliminate the player (works for human or bot)
-        // playerSprite is the Phaser sprite, which extends BasePlayer
+        console.log(`[CaveScene] ${playerSprite.name} hit by enemy!`);
         if (playerSprite.isAlive() && !this.gameOver) {
             playerSprite.eliminate('ENEMY_COLLISION');
-            // Game over will be triggered by the update loop checking isHumanAlive()
         }
     }
 
@@ -1284,6 +1337,12 @@ export class CaveScene extends Scene {
     setupMultiplayerListeners() {
         const sm = this.socketManager;
 
+        // Wipe any listeners left over from a previous game-over → restart in
+        // the same browser session. SocketManager listeners are anonymous arrow
+        // wrappers, so we drop ALL of them here and re-register fresh below.
+        sm.removeAllListeners();
+        this.events.once(Phaser.Scenes.Events.SHUTDOWN, () => sm.removeAllListeners());
+
         sm.on('net:room_joined', (data) => {
             console.log('[CaveScene] Joined room:', data.roomId);
             this.localPlayerId = data.playerId;
@@ -1301,14 +1360,21 @@ export class CaveScene extends Scene {
         });
 
         sm.on('net:game_start', (data) => {
+            console.log('[CaveScene] net:game_start received',
+                'rooms=' + (data.rooms?.length ?? 0),
+                'spawn=(' + data.spawnX + ',' + data.spawnY + ')',
+                'pickups=' + (data.oilPickups?.length ?? 0),
+                'players=' + (data.players?.length ?? 0));
             this.localPlayerId = data.playerId;
-            this._pendingServerRooms = data.rooms;
+            this.generateMaze(this.tileLayer, data.rooms);
             this.startGame(data);
         });
 
         sm.on('net:world_snapshot', (data) => {
             if (!this.gameStarted) return;
             this.playerManager.applySnapshot(data.players, this.localPlayerId);
+
+            this.applyEnemySnapshot(data.enemies);
 
             // Apply dirty pickup state changes
             if (data.oilPickups) {
@@ -1323,12 +1389,25 @@ export class CaveScene extends Scene {
 
             const isLocal = data.playerId === this.localPlayerId;
 
+            // Record in the local tracker so handleGameOver can read back the
+            // real reason/rank (server is authoritative on rank in MP mode).
+            if (this.eliminationTracker) {
+                this.eliminationTracker.eliminations.push({
+                    playerName: data.playerName,
+                    isHuman: isLocal,
+                    reason: data.reason,
+                    time: this.time.now / 1000,
+                    rank: data.rank,
+                    score: isLocal && this.player ? this.player.score : 0,
+                    oilRemaining: isLocal && this.player ? this.player.currentOil : 0
+                });
+            }
+
             if (this.eliminationFeed) {
                 this.eliminationFeed.addElimination(data.playerName, data.reason, data.rank);
             }
 
             if (isLocal && !this.gameOver) {
-                // Handle local player elimination
                 if (this.player) {
                     this.player.state = 'DEAD';
                     this.player.setVisible(false);

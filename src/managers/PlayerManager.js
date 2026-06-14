@@ -94,7 +94,7 @@ export class PlayerManager {
             if (entry.id === localPlayerId) {
                 // Local player — apply server correction
                 if (this.humanPlayer) {
-                    this.humanPlayer.applyServerState(entry.x, entry.y, entry.oil, entry.speed);
+                    this.humanPlayer.applyServerState(entry.x, entry.y, entry.oil, entry.speed, entry.score);
                 }
             } else {
                 // Remote player — add snapshot for interpolation

@@ -94,6 +94,16 @@ export class BasePlayer extends Physics.Arcade.Sprite {
 
         const deltaSeconds = delta / 1000;
 
+        // In MP mode the server is authoritative for oil, eliminations, and score —
+        // the client just reflects what arrives in world_snapshots. Locally driving
+        // these counters causes drift between snapshots and can fire spurious
+        // eliminate('OIL_DEPLETED') when the local copy hits 0 before the next
+        // snapshot resets it. Skip the local accounting entirely.
+        if (this.scene.isMultiplayer) {
+            this.survivalTime += deltaSeconds; // visual-only, kept for UI
+            return;
+        }
+
         // Deplete oil over time
         this.currentOil -= this.oilDepletionRate * deltaSeconds;
         this.currentOil = Math.max(0, this.currentOil);

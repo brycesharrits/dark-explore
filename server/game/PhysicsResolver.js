@@ -11,23 +11,26 @@ export class PhysicsResolver {
      * @param {ServerPlayerState} player
      * @param {Uint8Array} wallGrid - 1 = wall, 0 = floor (row-major: y * GRID_WIDTH + x)
      */
-    static resolve(player, wallGrid) {
-        const r = PLAYER_RADIUS;
+    static resolve(entity, wallGrid, radius = PLAYER_RADIUS) {
+        const r = radius;
         const worldW = GRID_WIDTH * TILE_SIZE;
         const worldH = GRID_HEIGHT * TILE_SIZE;
 
         // Clamp to world bounds first
-        player.x = Math.max(r, Math.min(worldW - r, player.x));
-        player.y = Math.max(r, Math.min(worldH - r, player.y));
+        entity.x = Math.max(r, Math.min(worldW - r, entity.x));
+        entity.y = Math.max(r, Math.min(worldH - r, entity.y));
 
-        if (!wallGrid) return;
+        if (!wallGrid) return { hitX: false, hitY: false };
 
-        // Check 4 corners of player AABB
+        let hitX = false;
+        let hitY = false;
+
+        // Check 4 corners of entity AABB
         const corners = [
-            { x: player.x - r, y: player.y - r },
-            { x: player.x + r, y: player.y - r },
-            { x: player.x - r, y: player.y + r },
-            { x: player.x + r, y: player.y + r }
+            { x: entity.x - r, y: entity.y - r },
+            { x: entity.x + r, y: entity.y - r },
+            { x: entity.x - r, y: entity.y + r },
+            { x: entity.x + r, y: entity.y + r }
         ];
 
         for (const corner of corners) {
@@ -37,25 +40,28 @@ export class PhysicsResolver {
             if (tx < 0 || tx >= GRID_WIDTH || ty < 0 || ty >= GRID_HEIGHT) continue;
 
             if (wallGrid[ty * GRID_WIDTH + tx] === 1) {
-                // Tile center
                 const tileCX = (tx + 0.5) * TILE_SIZE;
                 const tileCY = (ty + 0.5) * TILE_SIZE;
 
-                const dx = player.x - tileCX;
-                const dy = player.y - tileCY;
+                const dx = entity.x - tileCX;
+                const dy = entity.y - tileCY;
 
                 const overlapX = TILE_SIZE / 2 + r - Math.abs(dx);
                 const overlapY = TILE_SIZE / 2 + r - Math.abs(dy);
 
                 if (overlapX > 0 && overlapY > 0) {
                     if (overlapX < overlapY) {
-                        player.x += Math.sign(dx) * overlapX;
+                        entity.x += Math.sign(dx) * overlapX;
+                        hitX = true;
                     } else {
-                        player.y += Math.sign(dy) * overlapY;
+                        entity.y += Math.sign(dy) * overlapY;
+                        hitY = true;
                     }
                 }
             }
         }
+
+        return { hitX, hitY };
     }
 
     /**

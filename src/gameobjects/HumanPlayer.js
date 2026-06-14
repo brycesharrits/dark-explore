@@ -66,7 +66,7 @@ export class HumanPlayer extends BasePlayer {
      * Apply authoritative position/state from the server snapshot.
      * Soft-corrects small drift, hard-snaps large divergence.
      */
-    applyServerState(serverX, serverY, oil, speed) {
+    applyServerState(serverX, serverY, oil, speed, score) {
         const dx = Math.abs(this.x - serverX);
         const dy = Math.abs(this.y - serverY);
 
@@ -82,6 +82,7 @@ export class HumanPlayer extends BasePlayer {
 
         this.currentOil = oil;
         if (speed !== undefined) this.speed = speed;
+        if (score !== undefined) this.score = score;
     }
 
     /**
