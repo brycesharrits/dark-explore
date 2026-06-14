@@ -2,11 +2,6 @@ import { Game } from "phaser";
 import { Preloader } from "./preloader";
 import { CaveScene } from "./scenes/CaveScene";
 import { CaveHudScene } from "./scenes/CaveHudScene";
-import { GameOverScene } from "./scenes/GameOverScene";
-import { HudScene } from "./scenes/HudScene";
-import { MainScene } from "./scenes/MainScene";
-import { MenuScene } from "./scenes/MenuScene";
-import { SplashScene } from "./scenes/SplashScene";
 import { SocketManager } from "./network/SocketManager";
 
 // Detect multiplayer mode via ?mp=1 URL param
@@ -51,12 +46,7 @@ const config = {
     scene: [
         Preloader,
         CaveScene,
-        CaveHudScene,
-        SplashScene,
-        MainScene,
-        MenuScene,
-        HudScene,
-        GameOverScene
+        CaveHudScene
     ]
 };
 
