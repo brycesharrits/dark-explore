@@ -109,6 +109,10 @@ export class CaveScene extends Scene {
         console.log('[CaveScene] Creating tile grid...');
         this.createTileGrid();
 
+        // Generate shared particle textures used by dust motes, collect bursts,
+        // ember trails, and elimination puffs. Done once per scene create().
+        this._createVisualFxTextures();
+
         // Initialize PlayerManager and spawn human player
         console.log('[CaveScene] Initializing PlayerManager...');
         this.playerManager = new PlayerManager(this);
@@ -691,9 +695,11 @@ export class CaveScene extends Scene {
                 this.cameras.main.centerOn(mpData.spawnX, mpData.spawnY);
             }
 
-            // Spawn remote players for other humans
+            // Spawn remote sprites for every other server-controlled player
+            // (other humans AND server bots). Bots are simulated server-side
+            // and arrive via world_snapshot just like remote humans.
             for (const p of mpData.players) {
-                if (p.id === this.localPlayerId || p.isBot) continue;
+                if (p.id === this.localPlayerId) continue;
                 this.playerManager.spawnRemotePlayer(p.id, p.name, p.x, p.y);
             }
 
@@ -720,6 +726,9 @@ export class CaveScene extends Scene {
 
         // Play lantern flicker effect now that we're at the correct spawn position
         this.playLanternFlicker();
+
+        // Ambient dust motes drift through the lantern beam from now on
+        this._createAmbientDust();
 
         // Launch the HUD scene
         console.log('[CaveScene] Launching HUD scene...');
@@ -777,6 +786,9 @@ export class CaveScene extends Scene {
      */
     onPlayerEliminated(player, reason) {
         console.log(`[CaveScene] onPlayerEliminated: ${player.name} - ${reason}`);
+
+        // Smoky puff at the death position before the sprite gets hidden
+        this.playEliminationBurst(player.x, player.y);
 
         // Record elimination in tracker
         const gameTime = this.time.now / 1000; // Convert to seconds
@@ -1298,6 +1310,95 @@ export class CaveScene extends Scene {
     }
 
     // =========================================================================
+    // VISUAL EFFECTS (particles + accent lights)
+    // =========================================================================
+
+    /**
+     * Generate the tiny textures used by every particle effect in the game.
+     * A single soft white dot is reused everywhere and tinted per emitter so we
+     * don't burn texture slots on per-effect art.
+     */
+    _createVisualFxTextures() {
+        if (this.textures.exists('fx-dot')) return;
+
+        const g = this.make.graphics({ x: 0, y: 0, add: false });
+        // Soft 6px dot: bright center, faded edge — reads well at any tint.
+        g.fillStyle(0xffffff, 1);
+        g.fillCircle(3, 3, 1.5);
+        g.fillStyle(0xffffff, 0.5);
+        g.fillCircle(3, 3, 3);
+        g.generateTexture('fx-dot', 6, 6);
+        g.destroy();
+    }
+
+    /**
+     * Slow drifting dust motes that follow the player. Light2D-piped so they
+     * only show inside the lantern beam — invisible motes outside the light
+     * cost nothing visually but reinforce the "cave air" feel where lit.
+     */
+    _createAmbientDust() {
+        if (this.dustEmitter) return;
+        this.dustEmitter = this.add.particles(0, 0, 'fx-dot', {
+            follow: this.player,
+            lifespan: 4000,
+            frequency: 180,
+            speed: { min: 4, max: 18 },
+            angle: { min: 0, max: 360 },
+            scale: { start: 0.9, end: 0.2 },
+            alpha: { start: 0.45, end: 0 },
+            tint: 0xddccaa,
+            emitZone: {
+                type: 'random',
+                source: new Phaser.Geom.Circle(0, 0, 140)
+            }
+        });
+        this.dustEmitter.setDepth(5);
+        this.dustEmitter.setPipeline('Light2D');
+    }
+
+    /**
+     * One-shot sparkle burst — used for pickup collection. `color` is a hex
+     * number used as a tint; reuses the shared 'fx-dot' texture.
+     */
+    playCollectBurst(x, y, color = 0xffaa33) {
+        const burst = this.add.particles(x, y, 'fx-dot', {
+            lifespan: 500,
+            speed: { min: 60, max: 160 },
+            angle: { min: 0, max: 360 },
+            scale: { start: 1.4, end: 0 },
+            alpha: { start: 1, end: 0 },
+            tint: color,
+            quantity: 14,
+            emitting: false
+        });
+        burst.setDepth(20);
+        burst.setPipeline('Light2D');
+        burst.explode(14);
+        // Auto-clean once particles fade
+        this.time.delayedCall(700, () => burst.destroy());
+    }
+
+    /**
+     * Gray smoky puff for player eliminations.
+     */
+    playEliminationBurst(x, y) {
+        const burst = this.add.particles(x, y, 'fx-dot', {
+            lifespan: 800,
+            speed: { min: 30, max: 110 },
+            angle: { min: 0, max: 360 },
+            scale: { start: 2, end: 0.4 },
+            alpha: { start: 0.8, end: 0 },
+            tint: 0x888888,
+            quantity: 22,
+            emitting: false
+        });
+        burst.setDepth(20);
+        burst.setPipeline('Light2D');
+        burst.explode(22);
+        this.time.delayedCall(1000, () => burst.destroy());
+    }
+
+    // =========================================================================
     // MULTIPLAYER
     // =========================================================================
 
@@ -1386,6 +1487,7 @@ export class CaveScene extends Scene {
 
             if (isLocal && !this.gameOver) {
                 if (this.player) {
+                    this.playEliminationBurst(this.player.x, this.player.y);
                     this.player.state = 'DEAD';
                     this.player.setVisible(false);
                     if (this.player.body) this.player.body.enable = false;

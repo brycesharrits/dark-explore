@@ -57,9 +57,12 @@ export class PowerUpManager {
 
     _addPowerUp(id, x, y) {
         const sprite = this._createSprite(x, y, id);
+        // Cool-blue accent light — visually distinct from the warm oil pickups
+        const light = this.scene.lights.addLight(x, y, 70, 0x33aaff, 0.8);
         this.powerUps.push({
             id,
             sprite,
+            light,
             initialX: x,
             initialY: y,
             state: 'ACTIVE',
@@ -118,6 +121,11 @@ export class PowerUpManager {
         powerUp.respawnTimer = this.respawnDelay;
         powerUp.sprite.setVisible(false);
         powerUp.sprite.body.enable = false;
+        if (powerUp.light) powerUp.light.visible = false;
+
+        if (this.scene.playCollectBurst) {
+            this.scene.playCollectBurst(powerUp.initialX, powerUp.initialY, 0x66ddff);
+        }
     }
 
     /**
@@ -166,6 +174,7 @@ export class PowerUpManager {
         powerUp.sprite.setPosition(powerUp.initialX, powerUp.initialY);
         powerUp.sprite.setScale(1);
         powerUp.sprite.setAlpha(1);
+        if (powerUp.light) powerUp.light.visible = true;
     }
 
     updatePulseAnimation(powerUp, delta) {
@@ -193,6 +202,10 @@ export class PowerUpManager {
             powerUp.state = 'COLLECTED';
             powerUp.sprite.setVisible(false);
             powerUp.sprite.body.enable = false;
+            if (powerUp.light) powerUp.light.visible = false;
+            if (this.scene.playCollectBurst) {
+                this.scene.playCollectBurst(powerUp.initialX, powerUp.initialY, 0x66ddff);
+            }
         } else if (state === 'ACTIVE' && powerUp.state === 'COLLECTED') {
             powerUp.state = 'ACTIVE';
             powerUp.sprite.setVisible(true);
@@ -200,6 +213,7 @@ export class PowerUpManager {
             powerUp.sprite.setPosition(powerUp.initialX, powerUp.initialY);
             powerUp.sprite.setScale(1);
             powerUp.sprite.setAlpha(1);
+            if (powerUp.light) powerUp.light.visible = true;
         }
     }
 }

@@ -55,10 +55,14 @@ export class OilPickupManager {
             sprite.setPipeline('Light2D'); // Enable lighting
             sprite.setDepth(10); // Draw above floor
 
+            // Amber accent light so pickups glow softly when within view
+            const light = this.scene.lights.addLight(x, y, 60, 0xff9933, 0.7);
+
             // Create pickup object with state
             const pickup = {
                 id: i,
                 sprite: sprite,
+                light: light,
                 initialX: x,
                 initialY: y,
                 state: 'ACTIVE', // 'ACTIVE' | 'COLLECTED'
@@ -124,6 +128,12 @@ export class OilPickupManager {
         // Hide sprite (don't destroy it)
         pickup.sprite.setVisible(false);
         pickup.sprite.body.enable = false;
+        if (pickup.light) pickup.light.visible = false;
+
+        // Visual feedback: amber sparkle burst at the pickup location
+        if (this.scene.playCollectBurst) {
+            this.scene.playCollectBurst(pickup.initialX, pickup.initialY, 0xffaa33);
+        }
     }
 
     /**
@@ -165,6 +175,8 @@ export class OilPickupManager {
         // Reset scale and alpha for pulse animation
         pickup.sprite.setScale(1);
         pickup.sprite.setAlpha(1);
+
+        if (pickup.light) pickup.light.visible = true;
     }
 
     /**
@@ -230,9 +242,12 @@ export class OilPickupManager {
             sprite.setPipeline('Light2D');
             sprite.setDepth(10);
 
+            const light = this.scene.lights.addLight(pos.x, pos.y, 60, 0xff9933, 0.7);
+
             this.pickups.push({
                 id: pos.id,
                 sprite,
+                light,
                 initialX: pos.x,
                 initialY: pos.y,
                 state: 'ACTIVE',
@@ -259,6 +274,10 @@ export class OilPickupManager {
             pickup.state = 'COLLECTED';
             pickup.sprite.setVisible(false);
             pickup.sprite.body.enable = false;
+            if (pickup.light) pickup.light.visible = false;
+            if (this.scene.playCollectBurst) {
+                this.scene.playCollectBurst(pickup.initialX, pickup.initialY, 0xffaa33);
+            }
         } else if (state === 'ACTIVE' && pickup.state === 'COLLECTED') {
             pickup.state = 'ACTIVE';
             pickup.sprite.setVisible(true);
@@ -266,6 +285,7 @@ export class OilPickupManager {
             pickup.sprite.setPosition(pickup.initialX, pickup.initialY);
             pickup.sprite.setScale(1);
             pickup.sprite.setAlpha(1);
+            if (pickup.light) pickup.light.visible = true;
         }
     }
 }

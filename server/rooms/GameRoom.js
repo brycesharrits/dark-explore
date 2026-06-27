@@ -83,15 +83,18 @@ export class GameRoom {
 
     startCountdown() {
         this.status = 'COUNTDOWN';
-        let remaining = COUNTDOWN_SECONDS;
+        this._countdownStartMs = Date.now();
+        const totalMs = COUNTDOWN_SECONDS * 1000;
+        const stepMs = 200;
 
         const tick = () => {
-            this.broadcastLobbyUpdate(remaining);
-            remaining--;
-            if (remaining < 0) {
+            const elapsed = Date.now() - this._countdownStartMs;
+            const remainingMs = Math.max(0, totalMs - elapsed);
+            this.broadcastLobbyUpdate(Math.ceil(remainingMs / 1000));
+            if (remainingMs <= 0) {
                 this.startGame();
             } else {
-                this.countdownTimeout = setTimeout(tick, 1000);
+                this.countdownTimeout = setTimeout(tick, stepMs);
             }
         };
 
@@ -104,6 +107,20 @@ export class GameRoom {
             name: p.displayName,
             isBot: false
         }));
+
+        // Mid-countdown, animate filler bots into the lobby so the visible
+        // roster grows from `humans` up to BOT_FILL_TO. These are display-only
+        // — actual bot game objects are created in startGame().
+        if (this.status === 'COUNTDOWN' && this._countdownStartMs != null) {
+            const totalMs = COUNTDOWN_SECONDS * 1000;
+            const elapsed = Math.min(totalMs, Date.now() - this._countdownStartMs);
+            const progress = totalMs > 0 ? elapsed / totalMs : 1;
+            const slotsLeft = Math.max(0, BOT_FILL_TO - playerList.length);
+            const fillerCount = Math.round(progress * slotsLeft);
+            for (let i = 0; i < fillerCount; i++) {
+                playerList.push({ id: `bot_${i}`, name: `Bot${i + 1}`, isBot: true });
+            }
+        }
 
         this.io.to(this.roomId).emit('lobby_update', { players: playerList, countdownSeconds });
     }

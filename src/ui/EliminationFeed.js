@@ -8,6 +8,7 @@ export class EliminationFeed {
         this.feedItems = []; // Array of text objects
         this.maxItems = 6; // Maximum number of items to show
         this.fadeOutDuration = 500; // Fade out animation duration (ms) when pushed off
+        this.itemLifetime = 3000; // Max time an item stays before auto-expiring (ms)
 
         // Feed positioning (top-right corner)
         this.x = scene.cameras.main.width - 10; // Right side with padding
@@ -31,6 +32,12 @@ export class EliminationFeed {
         // Remove oldest item if we're at max capacity (push off the bottom)
         if (this.feedItems.length >= this.maxItems) {
             const oldestItem = this.feedItems[this.feedItems.length - 1];
+
+            // Cancel its lifetime timer — we're removing it now.
+            if (oldestItem.expireTimer) {
+                oldestItem.expireTimer.remove(false);
+                oldestItem.expireTimer = null;
+            }
 
             // Fade out and destroy
             this.scene.tweens.add({
@@ -68,11 +75,20 @@ export class EliminationFeed {
         // Store item with metadata
         const feedItem = {
             text: textObj,
-            createdAt: Date.now()
+            createdAt: Date.now(),
+            expireTimer: null
         };
 
         // Add to beginning of feed (top)
         this.feedItems.unshift(feedItem);
+
+        // Auto-expire after itemLifetime unless pushed off by newer items first.
+        feedItem.expireTimer = this.scene.time.delayedCall(this.itemLifetime, () => {
+            feedItem.expireTimer = null;
+            if (this.feedItems.includes(feedItem)) {
+                this.removeItem(feedItem);
+            }
+        });
 
         // Fade in animation for new item
         this.scene.tweens.add({
@@ -106,6 +122,10 @@ export class EliminationFeed {
      * (Not actively used - items are removed when pushed off)
      */
     removeItem(feedItem) {
+        if (feedItem.expireTimer) {
+            feedItem.expireTimer.remove(false);
+            feedItem.expireTimer = null;
+        }
         // Fade out and destroy
         this.scene.tweens.add({
             targets: feedItem.text,
@@ -158,6 +178,7 @@ export class EliminationFeed {
      */
     clear() {
         this.feedItems.forEach(item => {
+            if (item.expireTimer) item.expireTimer.remove(false);
             item.text.destroy();
         });
         this.feedItems = [];

@@ -34,7 +34,46 @@ export class CaveEnemy extends Physics.Arcade.Sprite {
         this.changeDirectionDelay = 2000; // Change direction every 2 seconds
         this.currentDirection = Phaser.Math.Between(0, 7); // 8 directions (including diagonals)
 
+        // Dim red accent light — gives a faint warning glow before a kill
+        this.accentLight = scene.lights.addLight(x, y, 45, 0xff2233, 0.6);
+
+        // Sparse ember particle trail. Light2D so embers are only visible
+        // when the player is close enough to see the enemy.
+        if (scene.textures.exists('fx-dot')) {
+            this.embers = scene.add.particles(0, 0, 'fx-dot', {
+                follow: this,
+                lifespan: 600,
+                frequency: 120,
+                speed: { min: 10, max: 30 },
+                angle: { min: 0, max: 360 },
+                scale: { start: 0.8, end: 0 },
+                alpha: { start: 0.9, end: 0 },
+                tint: [0xff3322, 0xff8844]
+            });
+            this.embers.setDepth(11);
+            this.embers.setPipeline('Light2D');
+        }
+
         console.log('[CaveEnemy] constructor complete - speed:', this.speed, '- lighting enabled');
+    }
+
+    preUpdate(time, delta) {
+        super.preUpdate(time, delta);
+        if (this.accentLight) {
+            this.accentLight.setPosition(this.x, this.y);
+        }
+    }
+
+    destroy(fromScene) {
+        if (this.accentLight && this.scene && this.scene.lights) {
+            this.scene.lights.removeLight(this.accentLight);
+            this.accentLight = null;
+        }
+        if (this.embers) {
+            this.embers.destroy();
+            this.embers = null;
+        }
+        super.destroy(fromScene);
     }
 
     update(time, delta) {

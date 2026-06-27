@@ -85,6 +85,9 @@ export class RemotePlayer extends BasePlayer {
      */
     applyElimination() {
         this.state = 'DEAD';
+        if (this.scene && this.scene.playEliminationBurst) {
+            this.scene.playEliminationBurst(this.x, this.y);
+        }
         this.setVisible(false);
         if (this.body) this.body.enable = false;
     }
