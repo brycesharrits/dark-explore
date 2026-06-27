@@ -21,18 +21,10 @@ export const SERVER_CONFIG = {
     OIL_AMOUNT: 25,          // per pickup
     OIL_RESPAWN_DELAY: 15000, // ms
 
-    // Power-ups
+    // Power-ups (speed boost only)
     POWER_UP_RESPAWN_DELAY: 20000, // ms
-    POWER_UP_TYPES: [
-        { type: 'speed',      weight: 0.70 },
-        { type: 'fullvision', weight: 0.20 },
-        { type: 'timewarp',   weight: 0.10 }
-    ],
     SPEED_BOOST_MULTIPLIER: 1.8,
     SPEED_BOOST_DURATION: 8000,    // ms
-    FULL_VISION_DURATION: 10000,   // ms
-    TIMEWARP_SLOW: 0.4,            // multiplier applied to affected players
-    TIMEWARP_DURATION: 6000,       // ms
 
     // Spawns
     PICKUP_COUNT: 30,

@@ -110,8 +110,12 @@ export class OilPickupManager {
 
         console.log(`[OilPickupManager] ${player.name} collected pickup ${pickup.id}`);
 
-        // Add oil to player
-        player.addOil(pickup.oilAmount);
+        // In MP mode the server is authoritative for oil; predicting locally
+        // causes a flicker when a snapshot taken before the server-side pickup
+        // tick arrives and overwrites the prediction.
+        if (!this.scene.isMultiplayer) {
+            player.addOil(pickup.oilAmount);
+        }
 
         // Change state to collected
         pickup.state = 'COLLECTED';

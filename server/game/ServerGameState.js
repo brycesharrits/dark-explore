@@ -3,8 +3,7 @@ import { PhysicsResolver } from './PhysicsResolver.js';
 
 const {
     OIL_RESPAWN_DELAY, POWER_UP_RESPAWN_DELAY, OIL_AMOUNT,
-    SPEED_BOOST_MULTIPLIER, SPEED_BOOST_DURATION,
-    FULL_VISION_DURATION, TIMEWARP_SLOW, TIMEWARP_DURATION,
+    SPEED_BOOST_DURATION,
     ENEMY_COUNT, ENEMY_SPEED, ENEMY_RADIUS, PLAYER_RADIUS,
     TILE_SIZE, GRID_WIDTH, GRID_HEIGHT, ENEMY_TURN_INTERVAL
 } = SERVER_CONFIG;
@@ -21,8 +20,7 @@ export class ServerGameState {
         this.powerUps = worldData.powerUps.map(p => ({
             ...p,
             state: 'ACTIVE',
-            respawnAt: 0,
-            activePowerUpId: null // tracks which active power-up effect this generated
+            respawnAt: 0
         }));
 
         // Dirty tracking for delta snapshots
@@ -34,9 +32,6 @@ export class ServerGameState {
 
         // Alive count
         this.aliveCount = 0;
-
-        // Active power-up effects: [{powerUpId, type, collectorId, expiresAt, affectedIds}]
-        this.activePowerUpEffects = [];
 
         // Wall grid (for collision checks)
         this.wallGrid = worldData.wallGrid;
@@ -117,56 +112,16 @@ export class ServerGameState {
     }
 
     _applyPowerUp(powerUp, collector) {
-        const now = Date.now();
-        let effect = {
+        collector.speedBoostActive = true;
+        collector.speedBoostTimer = SPEED_BOOST_DURATION;
+
+        return {
             type: 'powerup_collected',
             powerUpId: powerUp.id,
             collectorId: collector.id,
-            powerUpType: powerUp.type,
-            affectedPlayerIds: []
+            powerUpType: 'speed',
+            duration: SPEED_BOOST_DURATION
         };
-
-        if (powerUp.type === 'speed') {
-            collector.speedBoostActive = true;
-            collector.speedBoostTimer = SPEED_BOOST_DURATION;
-            effect.duration = SPEED_BOOST_DURATION;
-
-        } else if (powerUp.type === 'fullvision') {
-            effect.duration = FULL_VISION_DURATION;
-            // Purely cosmetic — client handles visuals
-            this.activePowerUpEffects.push({
-                powerUpId: powerUp.id,
-                type: 'fullvision',
-                collectorId: collector.id,
-                expiresAt: now + FULL_VISION_DURATION
-            });
-
-        } else if (powerUp.type === 'timewarp') {
-            const affected = this.getAlivePlayers()
-                .filter(p => p.id !== collector.id)
-                .map(p => p.id);
-
-            affected.forEach(id => {
-                const p = this.players.get(id);
-                if (p) {
-                    p.timeWarpSlowActive = true;
-                    p.timeWarpSlowTimer = TIMEWARP_DURATION;
-                }
-            });
-
-            effect.duration = TIMEWARP_DURATION;
-            effect.affectedPlayerIds = affected;
-
-            this.activePowerUpEffects.push({
-                powerUpId: powerUp.id,
-                type: 'timewarp',
-                collectorId: collector.id,
-                expiresAt: now + TIMEWARP_DURATION,
-                affectedIds: affected
-            });
-        }
-
-        return effect;
     }
 
     // -----------------------------------------------------------------------
@@ -191,17 +146,6 @@ export class ServerGameState {
             }
         }
 
-        // Check power-up effect expirations
-        const remaining = [];
-        for (const effect of this.activePowerUpEffects) {
-            if (now >= effect.expiresAt) {
-                events.push({ type: 'powerup_expired', powerUpId: effect.powerUpId, powerUpType: effect.type, affectedPlayerIds: effect.affectedIds || [] });
-            } else {
-                remaining.push(effect);
-            }
-        }
-        this.activePowerUpEffects = remaining;
-
         return events;
     }
 
@@ -215,13 +159,6 @@ export class ServerGameState {
             if (player.speedBoostTimer <= 0) {
                 player.speedBoostActive = false;
                 player.speedBoostTimer = 0;
-            }
-        }
-        if (player.timeWarpSlowActive) {
-            player.timeWarpSlowTimer -= dtMs;
-            if (player.timeWarpSlowTimer <= 0) {
-                player.timeWarpSlowActive = false;
-                player.timeWarpSlowTimer = 0;
             }
         }
     }

@@ -1,7 +1,7 @@
 import seedrandom from 'seedrandom';
 import { SERVER_CONFIG } from '../config/ServerConfig.js';
 
-const { TILE_SIZE, GRID_WIDTH, GRID_HEIGHT, PICKUP_COUNT, POWER_UP_COUNT, POWER_UP_TYPES } = SERVER_CONFIG;
+const { TILE_SIZE, GRID_WIDTH, GRID_HEIGHT, PICKUP_COUNT, POWER_UP_COUNT } = SERVER_CONFIG;
 
 export class WorldGenerator {
     /**
@@ -272,21 +272,10 @@ export class WorldGenerator {
             } while (attempts < 500);
 
             if (valid) {
-                const type = WorldGenerator._selectPowerUpType(rng);
-                powerUps.push({ id: i, x, y, type });
+                powerUps.push({ id: i, x, y, type: 'speed' });
             }
         }
 
         return powerUps;
-    }
-
-    static _selectPowerUpType(rng) {
-        const roll = rng();
-        let cumulative = 0;
-        for (const entry of POWER_UP_TYPES) {
-            cumulative += entry.weight;
-            if (roll < cumulative) return entry.type;
-        }
-        return POWER_UP_TYPES[0].type;
     }
 }

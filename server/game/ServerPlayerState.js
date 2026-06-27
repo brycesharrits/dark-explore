@@ -22,8 +22,6 @@ export class ServerPlayerState {
         // Active power-up effects
         this.speedBoostActive = false;
         this.speedBoostTimer = 0;
-        this.timeWarpSlowActive = false;
-        this.timeWarpSlowTimer = 0;
 
         // Client input (updated by incoming player_input events)
         this.pendingInput = { up: false, down: false, left: false, right: false };
@@ -42,7 +40,6 @@ export class ServerPlayerState {
     getEffectiveSpeed() {
         let s = this.speed;
         if (this.speedBoostActive) s *= SERVER_CONFIG.SPEED_BOOST_MULTIPLIER;
-        if (this.timeWarpSlowActive) s *= SERVER_CONFIG.TIMEWARP_SLOW;
         return s;
     }
 

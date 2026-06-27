@@ -13,6 +13,12 @@ export class RoomManager {
     handleJoin(socket, data) {
         const displayName = (data?.displayName || `Player_${socket.id.slice(0, 5)}`).slice(0, 20);
 
+        // If this socket is already attached to a room (client restarted after
+        // game-over without disconnecting), detach first — otherwise the old
+        // room keeps the socket in its broadcast set and ticks snapshots into
+        // the new game.
+        this._detachFromCurrentRoom(socket);
+
         // Find an available room or create one
         let room = this._findAvailableRoom();
         if (!room) {
@@ -49,6 +55,10 @@ export class RoomManager {
     }
 
     handleDisconnect(socket) {
+        this._detachFromCurrentRoom(socket);
+    }
+
+    _detachFromCurrentRoom(socket) {
         const roomId = this.socketToRoom.get(socket.id);
         if (!roomId) return;
 
@@ -61,6 +71,7 @@ export class RoomManager {
             }
         }
 
+        socket.leave(roomId);
         this.socketToRoom.delete(socket.id);
     }
 

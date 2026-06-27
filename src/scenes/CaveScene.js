@@ -57,9 +57,6 @@ export class CaveScene extends Scene {
         this.originalAmbientColor = 0x0a0a0a; // Store original ambient color
         this.debugPlayerLabels = []; // Array of debug text labels for players
 
-        // Full vision power-up indicator
-        this.fullVisionIndicatorActive = false; // When true, show light radius circle
-
         // Multiplayer
         this.isMultiplayer = false;
         this.socketManager = null;
@@ -77,9 +74,6 @@ export class CaveScene extends Scene {
         this.score = 0;
         this.scoreTimer = 0;
         this.enemySpawnTimer = null;
-
-        // Reset power-up states
-        this.fullVisionIndicatorActive = false;
 
         // Drop any MP enemy refs from a previous game-over → restart. Sprites are
         // destroyed automatically by Phaser scene shutdown, but the Map holding
@@ -705,6 +699,7 @@ export class CaveScene extends Scene {
 
             // Use server-provided pickup positions (collision set up by setupMultiplayerCollisions below)
             this.oilPickupManager.spawnAtPositions(mpData.oilPickups);
+            this.powerUpManager.spawnAtPositions(mpData.powerUps);
 
             const totalPlayers = mpData.players.length;
             this.eliminationTracker.initialize(totalPlayers);
@@ -816,11 +811,6 @@ export class CaveScene extends Scene {
         // Update high score if current score is higher
         if (this.score > CaveScene.sessionHighScore) {
             CaveScene.sessionHighScore = this.score;
-        }
-
-        // Clean up any active full vision effect
-        if (this.player && this.player.fullVisionActive) {
-            this.powerUpManager.endFullVisionEffect(this.player);
         }
 
         // Stop the HUD scene
@@ -1150,20 +1140,12 @@ export class CaveScene extends Scene {
     toggleDebugMode() {
         DebugConfig.toggle();
 
-        // Update ambient lighting based on debug mode
-        // BUT: Don't override if full vision power-up is active
         if (DebugConfig.isFeatureEnabled('fullVisibility')) {
-            // Brighten ambient light to see everything
             this.lights.setAmbientColor(DebugConfig.visual.fullVisibilityAmbient);
             console.log('[CaveScene] Debug mode: Full visibility ENABLED');
         } else {
-            // Only restore dark cave ambient if full vision power-up is NOT active
-            if (!this.fullVisionIndicatorActive) {
-                this.lights.setAmbientColor(this.originalAmbientColor);
-                console.log('[CaveScene] Debug mode: Full visibility DISABLED - Darkness restored');
-            } else {
-                console.log('[CaveScene] Debug mode: Full visibility DISABLED - But full vision power-up is active');
-            }
+            this.lights.setAmbientColor(this.originalAmbientColor);
+            console.log('[CaveScene] Debug mode: Full visibility DISABLED - Darkness restored');
         }
 
         // Show/hide debug info
@@ -1205,28 +1187,10 @@ export class CaveScene extends Scene {
         // Always clear previous frame's debug drawings
         this.debugGraphics.clear();
 
-        // Draw light radius indicator when full vision power-up is active
-        if (this.fullVisionIndicatorActive && this.player && this.lanternLight) {
-            const currentRadius = this.lanternLight.radius;
-
-            // Convert world position to screen position
-            const screenX = this.player.x - this.cameras.main.scrollX;
-            const screenY = this.player.y - this.cameras.main.scrollY;
-
-            // Draw circle outline showing light radius (yellow)
-            this.debugGraphics.lineStyle(2, 0xffff00, 1);
-            this.debugGraphics.strokeCircle(screenX, screenY, currentRadius);
-
-            // Draw filled circle with transparency
-            this.debugGraphics.fillStyle(0xffff00, 0.3);
-            this.debugGraphics.fillCircle(screenX, screenY, currentRadius);
-        }
-
         // Return early if debug mode is not enabled
         if (!DebugConfig.enabled) return;
 
-        // Draw light radius indicator in debug mode (if not already drawn by full vision)
-        if (DebugConfig.isFeatureEnabled('showLightRadius') && this.player && !this.fullVisionIndicatorActive) {
+        if (DebugConfig.isFeatureEnabled('showLightRadius') && this.player) {
             const currentRadius = this.lanternLight.radius;
 
             // Convert world position to screen position
@@ -1294,7 +1258,14 @@ export class CaveScene extends Scene {
      */
     playLanternSound() {
         try {
-            const ctx = new (window.AudioContext || window.webkitAudioContext)();
+            // Reuse a single AudioContext across scene restarts — browsers cap
+            // contexts per tab (≈6), so creating one per game start eventually
+            // fails after enough restarts.
+            let ctx = this.game.registry.get('audioContext');
+            if (!ctx) {
+                ctx = new (window.AudioContext || window.webkitAudioContext)();
+                this.game.registry.set('audioContext', ctx);
+            }
 
             const playClick = (startTime, freq, duration, gain) => {
                 const osc = ctx.createOscillator();
@@ -1380,6 +1351,12 @@ export class CaveScene extends Scene {
             if (data.oilPickups) {
                 for (const p of data.oilPickups) {
                     this.oilPickupManager.applyServerState(p.id, p.state);
+                }
+            }
+
+            if (data.powerUps) {
+                for (const p of data.powerUps) {
+                    this.powerUpManager.applyServerState(p.id, p.state);
                 }
             }
         });
