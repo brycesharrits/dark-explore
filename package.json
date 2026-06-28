@@ -3,15 +3,20 @@
   "version": "0.0.0",
   "type": "module",
   "scripts": {
+    "predev": "npm run gen:sprite",
     "dev": "vite",
+    "prebuild": "npm run gen:sprite",
     "build": "vite build",
     "preview": "vite preview",
     "server": "node server/server.js",
     "server:dev": "node --watch server/server.js",
-    "dev:mp": "concurrently \"vite\" \"node --watch server/server.js\""
+    "predev:mp": "npm run gen:sprite",
+    "dev:mp": "concurrently \"vite\" \"node --watch server/server.js\"",
+    "gen:sprite": "node scripts/gen-player-sprite.js"
   },
   "devDependencies": {
     "concurrently": "^8.2.0",
+    "pngjs": "^7.0.0",
     "vite": "^5.1.6"
   },
   "dependencies": {

@@ -6,11 +6,9 @@ import { Physics } from 'phaser';
  */
 export class BasePlayer extends Physics.Arcade.Sprite {
     constructor(scene, x, y, playerId, name) {
-        // Create a unique texture for this player
-        const textureName = `player-${playerId}`;
-        BasePlayer.createPlayerTexture(scene, textureName, playerId);
-
-        super(scene, x, y, textureName);
+        // Spritesheet + anims are loaded/registered in Preloader. Frame 0 is
+        // idle-down — a sensible default starting pose.
+        super(scene, x, y, 'player', 0);
 
         // Player identification
         this.playerId = playerId;
@@ -23,6 +21,12 @@ export class BasePlayer extends Physics.Arcade.Sprite {
 
         // Enable lighting on player sprite
         this.setPipeline('Light2D');
+        this.setTint(BasePlayer.tintForPlayerId(playerId));
+
+        // Facing direction drives which row of the spritesheet animates.
+        // Persists across stops so the idle pose matches the last walking direction.
+        this.facing = 'down';
+        this._currentAnimKey = null;
 
         // Player state
         this.state = 'ALIVE'; // 'ALIVE' | 'DEAD'
@@ -50,32 +54,25 @@ export class BasePlayer extends Physics.Arcade.Sprite {
     }
 
     /**
-     * Static method to create player texture
-     * Colors vary slightly based on playerId for visual distinction
+     * Map a playerId to a tint color. Human (id=0) stays yellow; everyone else
+     * gets a deterministic hue in the warm range. Accepts numeric ids (bots) or
+     * string ids (RemotePlayer's "remote_<socketId>").
      */
-    static createPlayerTexture(scene, textureName, playerId) {
-        // Skip if texture already exists
-        if (scene.textures.exists(textureName)) {
-            return;
-        }
+    static tintForPlayerId(playerId) {
+        if (playerId === 0) return 0xffff00;
 
-        const graphics = scene.make.graphics({ x: 0, y: 0, add: false });
-
-        // Vary color slightly based on playerId
-        // Human player (id=0) is yellow, bots are slight variations
-        let color;
-        if (playerId === 0) {
-            color = 0xffff00; // Yellow for human
+        let hash;
+        if (typeof playerId === 'number') {
+            hash = playerId;
         } else {
-            // Slight color variations for bots (yellow-orange range)
-            const hue = 40 + (playerId % 20) * 2; // 40-80 range (yellow to orange)
-            color = Phaser.Display.Color.HSLToColor(hue / 360, 0.8, 0.5).color;
+            hash = 0;
+            const s = String(playerId);
+            for (let i = 0; i < s.length; i++) {
+                hash = ((hash * 31) + s.charCodeAt(i)) & 0x7fffffff;
+            }
         }
-
-        graphics.fillStyle(color, 1);
-        graphics.fillCircle(16, 16, 12); // Circle with radius 12 at center of 32x32 texture
-        graphics.generateTexture(textureName, 32, 32);
-        graphics.destroy();
+        const hue = 20 + (hash % 80); // 20-100: red-orange through yellow-green
+        return Phaser.Display.Color.HSLToColor(hue / 360, 0.75, 0.55).color;
     }
 
     /**
@@ -91,6 +88,9 @@ export class BasePlayer extends Physics.Arcade.Sprite {
      */
     updateCommon(delta) {
         if (this.state !== 'ALIVE') return;
+
+        // Drive walk/idle animation — purely client-side, runs in both modes.
+        this.updateVisuals(this.body.velocity.x, this.body.velocity.y);
 
         const deltaSeconds = delta / 1000;
 
@@ -121,6 +121,32 @@ export class BasePlayer extends Physics.Arcade.Sprite {
         // Check for oil depletion elimination
         if (this.currentOil <= 0) {
             this.eliminate('OIL_DEPLETED');
+        }
+    }
+
+    /**
+     * Drive 4-direction facing + walk animation from a velocity vector. Called
+     * by updateCommon for local/bot players and by RemotePlayer with velocity
+     * derived from interpolated position deltas.
+     */
+    updateVisuals(vx, vy /* , delta */) {
+        const speedSq = vx * vx + vy * vy;
+        const isMoving = speedSq > 4; // 2px/s deadzone, squared
+
+        if (isMoving) {
+            // Pick dominant axis so diagonal movement still snaps to a single
+            // facing direction instead of flickering between two.
+            if (Math.abs(vx) > Math.abs(vy)) {
+                this.facing = vx < 0 ? 'left' : 'right';
+            } else {
+                this.facing = vy < 0 ? 'up' : 'down';
+            }
+        }
+
+        const animKey = `player-${isMoving ? 'walk' : 'idle'}-${this.facing}`;
+        if (this._currentAnimKey !== animKey) {
+            this.anims.play(animKey, true);
+            this._currentAnimKey = animKey;
         }
     }
 
