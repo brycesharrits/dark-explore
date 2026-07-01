@@ -1,40 +1,43 @@
 // Procedural pixel-art player spritesheet generator.
 //
-// Emits public/assets/player-sheet.png: a 128×128 PNG with 16 frames laid out
-// as 4 rows × 4 columns of 32×32 cells. Rows are facing directions (down /
+// Emits public/assets/player-sheet.png: a 192×192 PNG with 16 frames laid out
+// as 4 rows × 4 columns of 48×48 cells. Rows are facing directions (down /
 // left / right / up). Columns are walk-cycle frames (idle, step-A, passing,
-// step-B). All art is drawn in greyscale + alpha so Phaser's setTint can
-// colorize the sprite per-player at runtime.
+// step-B).
+//
+// Character: a mysterious hooded silhouette wrapped tight in a grey cloak
+// (blanket-wrap fit — narrow, body-shaped). The face is a deep void inside
+// the hood; the only thing reaching outside the cloak is a single bare arm
+// holding a warm oil lamp.
 //
 // Run: node scripts/gen-player-sprite.js  (or `npm run gen:sprite`)
-// Output is intended to be committed to the repo. Re-run only when the
-// drawing code below changes.
 
 import { PNG } from 'pngjs';
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 
-const TILE = 32;
+const TILE = 48;
 const COLS = 4;
 const ROWS = 4;
 const W = TILE * COLS;
 const H = TILE * ROWS;
 
 const png = new PNG({ width: W, height: H });
-// pngjs initializes png.data to zeros — fully transparent — so no explicit
-// clear pass needed.
 
-// Greyscale palette. Tint multiplies these by the player's color: white
-// pixels become the full tint; darker pixels become darker shades of it.
 const C = {
-    OUTLINE: [40, 40, 40, 255],
-    EYE:     [30, 30, 30, 255],
-    HAIR:    [80, 80, 80, 255],
-    HEAD:    [255, 255, 255, 255],
-    TORSO:   [232, 232, 232, 255],
-    ARM:     [216, 216, 216, 255],
-    LEG:     [184, 184, 184, 255],
+    HOOD:        [105, 105, 105, 255],
+    HOOD_DARK:   [55, 55, 55, 255],
+    HOOD_VOID:   [16, 16, 20, 255],
+    CLOAK:       [140, 140, 140, 255],
+    CLOAK_FOLD:  [108, 108, 108, 255],
+    CLOAK_EDGE:  [65, 65, 65, 255],
+    ARM:         [195, 195, 195, 255],
+    LAMP_FRAME:  [205, 205, 205, 255],
+    LAMP_DARK:   [90, 90, 90, 255],
+    LAMP_GLOW:   [255, 220, 130, 255],
+    LAMP_FLAME:  [255, 240, 175, 255],
+    LAMP_CORE:   [255, 255, 230, 255],
 };
 
 function px(x, y, c) {
@@ -64,75 +67,150 @@ function fillEllipse(cx, cy, rx, ry, c) {
     }
 }
 
-// Walk-cycle phase: returns vertical lift for each leg (A=left, B=right
-// relative to the unflipped sprite). Negative = raised. Frames 0/2 are
-// neutral; 1 = leg A up; 3 = leg B up. Arms in the drawers swing opposite
-// to the same-side leg, which (with the cross-mapping armA←b, armB←a) lands
-// the contralateral arm forward — the natural walking gait.
-function legPhase(frame) {
-    if (frame === 1) return { a: -2, b: 0 };
-    if (frame === 3) return { a: 0, b: -2 };
-    return { a: 0, b: 0 };
+// 7w × 10h oil lamp (plus a 2px bail above). (lx, ly) is the top-left of the
+// cap row. Warm three-step gradient inside the glass.
+function drawLamp(lx, ly) {
+    // Bail (wire arc up to the hand)
+    rect(lx + 2, ly - 2, 3, 1, C.LAMP_FRAME);
+    px(lx + 1, ly - 1, C.LAMP_FRAME);
+    px(lx + 5, ly - 1, C.LAMP_FRAME);
+
+    // Peaked cap
+    rect(lx + 2, ly, 3, 1, C.LAMP_FRAME);
+    rect(lx + 1, ly + 1, 5, 1, C.LAMP_FRAME);
+    rect(lx, ly + 2, 7, 1, C.LAMP_FRAME);
+
+    // Glass housing (rows 3..7) — gradient from outer glow to hot core
+    for (let dy = 3; dy <= 7; dy++) {
+        px(lx, ly + dy, C.LAMP_DARK);
+        px(lx + 6, ly + dy, C.LAMP_DARK);
+        px(lx + 1, ly + dy, C.LAMP_GLOW);
+        px(lx + 5, ly + dy, C.LAMP_GLOW);
+        px(lx + 2, ly + dy, C.LAMP_FLAME);
+        px(lx + 4, ly + dy, C.LAMP_FLAME);
+        px(lx + 3, ly + dy, C.LAMP_CORE);
+    }
+
+    // Base
+    rect(lx, ly + 8, 7, 1, C.LAMP_FRAME);
+    rect(lx + 1, ly + 9, 5, 1, C.LAMP_DARK);
+}
+
+// Narrow body-shaped cloak. halfStart controls shoulder width; slope controls
+// how much it flares to the hem (kept tiny for a wrapped-blanket look).
+function drawCloakBody(ox, oy, centerX, halfStart, slope) {
+    const dyTop = 18;
+    const dyCount = 29; // 18..46
+    for (let dy = 0; dy < dyCount; dy++) {
+        const halfW = halfStart + Math.floor(dy * slope);
+        rect(ox + centerX - halfW, oy + dyTop + dy, halfW * 2 + 1, 1, C.CLOAK);
+    }
+    // Center fold — the seam where the cloak is held closed
+    for (let dy = 3; dy < dyCount - 2; dy += 3) {
+        px(ox + centerX, oy + dyTop + dy, C.CLOAK_FOLD);
+    }
+    // Hem accent
+    const lastHalf = halfStart + Math.floor((dyCount - 1) * slope);
+    rect(ox + centerX - lastHalf, oy + dyTop + dyCount - 1, lastHalf * 2 + 1, 1, C.CLOAK_EDGE);
+}
+
+function bodyBob(frame) {
+    if (frame === 1) return -1;
+    if (frame === 3) return 1;
+    return 0;
+}
+function armBob(frame) {
+    if (frame === 1) return -1;
+    if (frame === 3) return 1;
+    return 0;
 }
 
 function drawDown(ox, oy, frame) {
-    const { a, b } = legPhase(frame);
-    fillEllipse(ox + 16, oy + 8, 5, 4, C.HEAD);
-    px(ox + 14, oy + 8, C.EYE);
-    px(ox + 18, oy + 8, C.EYE);
-    rect(ox + 12, oy + 13, 9, 9, C.TORSO);
-    rect(ox + 9,  oy + 14 + b, 3, 8, C.ARM);
-    rect(ox + 20, oy + 14 + a, 3, 8, C.ARM);
-    rect(ox + 12, oy + 22, 3, 8 + a, C.LEG);
-    rect(ox + 17, oy + 22, 3, 8 + b, C.LEG);
+    const bob = bodyBob(frame);
+    const ab = armBob(frame);
+
+    // Hood — slightly wider than the body so it drapes over the shoulders
+    fillEllipse(ox + 24, oy + 10 + bob, 8, 7, C.HOOD);
+    // Crown shadow
+    fillEllipse(ox + 24, oy + 7 + bob, 6, 4, C.HOOD_DARK);
+    // Deep void where the face would be
+    fillEllipse(ox + 24, oy + 12 + bob, 4, 4, C.HOOD_VOID);
+    // Hood front lip
+    rect(ox + 21, oy + 9 + bob, 7, 1, C.HOOD_DARK);
+
+    // Narrow shoulder line — blends hood into the wrapped cloak
+    rect(ox + 18, oy + 17 + bob, 13, 1, C.HOOD);
+
+    // Cloak wraps tight around the body, just a slight flare to the hem
+    drawCloakBody(ox, oy, 24, 6, 0.04);
+
+    // One arm reaches out from the cloak's left side. Sleeve overlaps the
+    // cloak by a pixel for a clean join; the rest is bare arm + lamp.
+    rect(ox + 14, oy + 23 + ab, 5, 4, C.CLOAK);   // cloaked upper arm
+    rect(ox + 10, oy + 25 + ab, 5, 4, C.ARM);     // bare forearm + hand
+    drawLamp(ox + 8, oy + 30 + ab);
 }
 
 function drawUp(ox, oy, frame) {
-    const { a, b } = legPhase(frame);
-    // Back of head — darker shade, no face.
-    fillEllipse(ox + 16, oy + 8, 5, 4, C.HAIR);
-    rect(ox + 12, oy + 13, 9, 9, C.TORSO);
-    rect(ox + 9,  oy + 14 + b, 3, 8, C.ARM);
-    rect(ox + 20, oy + 14 + a, 3, 8, C.ARM);
-    rect(ox + 12, oy + 22, 3, 8 + a, C.LEG);
-    rect(ox + 17, oy + 22, 3, 8 + b, C.LEG);
+    const bob = bodyBob(frame);
+    const ab = armBob(frame);
+
+    // Hood from the back — fuller, no face cutout
+    fillEllipse(ox + 24, oy + 11 + bob, 8, 8, C.HOOD);
+    fillEllipse(ox + 24, oy + 8 + bob, 6, 4, C.HOOD_DARK);
+    // Crown seam
+    rect(ox + 23, oy + 4 + bob, 3, 1, C.HOOD_DARK);
+    px(ox + 24, oy + 3 + bob, C.HOOD_DARK);
+
+    // Shoulders
+    rect(ox + 18, oy + 17 + bob, 13, 1, C.HOOD);
+
+    // Cloak
+    drawCloakBody(ox, oy, 24, 6, 0.04);
+
+    // Same arm visible from behind
+    rect(ox + 14, oy + 23 + ab, 5, 4, C.CLOAK);
+    rect(ox + 10, oy + 25 + ab, 5, 4, C.ARM);
+    drawLamp(ox + 8, oy + 30 + ab);
 }
 
-// Side profile. `facingRight=true` draws the character looking right;
-// `facingRight=false` mirrors horizontally for left-facing.
 function drawSide(ox, oy, frame, facingRight) {
-    const { a, b } = legPhase(frame);
-    // Mirror helper: given an x in [0, 32) within the frame, returns the
-    // mirrored x for left-facing.
-    const mx = (x) => facingRight ? x : (TILE - 1 - x);
+    const bob = bodyBob(frame);
+    const ab = armBob(frame);
+    // Mirror a left edge coordinate for a rect of given width.
+    const mLeft = (leftX, width) => facingRight ? leftX : (TILE - leftX - width);
 
-    // Head
-    fillEllipse(ox + mx(16), oy + 8, 5, 4, C.HEAD);
-    // Hair detail on the back of the head for orientation
-    for (let dx = -5; dx <= -2; dx++) {
-        for (let dy = -2; dy <= 2; dy++) {
-            const inside = (dx * dx) / 25 + (dy * dy) / 16 <= 1.0;
-            if (inside) px(ox + mx(16 + dx), oy + 8 + dy, C.HAIR);
-        }
+    // Hood profile
+    fillEllipse(ox + (facingRight ? 24 : (TILE - 1 - 24)), oy + 10 + bob, 7, 7, C.HOOD);
+    fillEllipse(ox + (facingRight ? 23 : (TILE - 1 - 23)), oy + 7 + bob, 5, 4, C.HOOD_DARK);
+    // Deep void inside the hood (slightly forward of center)
+    fillEllipse(ox + (facingRight ? 25 : (TILE - 1 - 25)), oy + 12 + bob, 3, 4, C.HOOD_VOID);
+    // Front hood lip
+    rect(ox + mLeft(27, 2), oy + 10 + bob, 2, 2, C.HOOD_DARK);
+
+    // Shoulders (narrower in side profile)
+    rect(ox + mLeft(20, 9), oy + 17 + bob, 9, 1, C.HOOD);
+
+    // Cloak wraps the body — narrower than the front view
+    const bodyCx = facingRight ? 24 : (TILE - 1 - 24);
+    const dyTop = 18;
+    const dyCount = 29;
+    for (let dy = 0; dy < dyCount; dy++) {
+        const halfW = 4 + Math.floor(dy * 0.03); // 4..4 (essentially vertical)
+        rect(ox + bodyCx - halfW, oy + dyTop + dy, halfW * 2 + 1, 1, C.CLOAK);
     }
-    // Single eye on the facing side
-    px(ox + mx(18), oy + 8, C.EYE);
+    // Center fold down the visible side
+    for (let dy = 3; dy < dyCount - 2; dy += 4) {
+        px(ox + bodyCx, oy + dyTop + dy, C.CLOAK_FOLD);
+    }
+    // Hem
+    const lastHalf = 4 + Math.floor((dyCount - 1) * 0.03);
+    rect(ox + bodyCx - lastHalf, oy + dyTop + dyCount - 1, lastHalf * 2 + 1, 1, C.CLOAK_EDGE);
 
-    // Torso — narrower than front view (depth)
-    rect(ox + mx(13) - (facingRight ? 0 : 6), oy + 13, 7, 9, C.TORSO);
-
-    // Two arms with front-back swing (X offset based on phase).
-    // Front arm (visible side) swings forward when same-side leg is back.
-    const frontArmOffset = -b;  // forward when leg B is planted/back
-    const backArmOffset  = -a;
-    // For left-facing, "forward" flips sign.
-    const dir = facingRight ? 1 : -1;
-    rect(ox + mx(19) + dir * frontArmOffset, oy + 14, 2, 8, C.ARM);
-    rect(ox + mx(12) + dir * backArmOffset,  oy + 14, 2, 8, C.ARM);
-
-    // Legs — both visible, slight x-offset and lift creates step illusion
-    rect(ox + mx(13), oy + 22, 3, 8 + a, C.LEG);
-    rect(ox + mx(17), oy + 22, 3, 8 + b, C.LEG);
+    // Single front arm extending forward, lamp held out ahead
+    rect(ox + mLeft(28, 4), oy + 23 + ab, 4, 4, C.CLOAK);   // cloaked upper arm
+    rect(ox + mLeft(31, 4), oy + 25 + ab, 4, 4, C.ARM);     // bare forearm + hand
+    drawLamp(ox + mLeft(33, 7), oy + 30 + ab);
 }
 
 // Row order matches the animation keys registered in Preloader:

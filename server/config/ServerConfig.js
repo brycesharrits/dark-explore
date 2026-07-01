@@ -19,7 +19,7 @@ export const SERVER_CONFIG = {
     OIL_DEPLETION_RATE: 5,   // units per second
     MAX_OIL: 100,
     OIL_AMOUNT: 25,          // per pickup
-    OIL_RESPAWN_DELAY: 15000, // ms
+    OIL_RESPAWN_DELAY: 16500, // ms
 
     // Power-ups (speed boost only)
     POWER_UP_RESPAWN_DELAY: 20000, // ms
@@ -27,7 +27,7 @@ export const SERVER_CONFIG = {
     SPEED_BOOST_DURATION: 8000,    // ms
 
     // Spawns
-    PICKUP_COUNT: 30,
+    PICKUP_COUNT: 27,
     POWER_UP_COUNT: 6,
     ENEMY_COUNT: 15,
     ENEMY_SPAWN_DELAY: 5000, // ms

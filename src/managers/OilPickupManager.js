@@ -40,29 +40,11 @@ export class OilPickupManager {
 
             if (!valid) continue;
 
-            // Create graphics for the oil pickup
-            const graphics = this.scene.make.graphics({ x: 0, y: 0, add: false });
-            graphics.fillStyle(0xff6600, 1); // Orange color
-            graphics.fillCircle(8, 8, 6); // Small circle
+            const sprite = this._createSprite(x, y, i);
 
-            // Generate unique texture
-            const textureName = `oil-pickup-${i}`;
-            graphics.generateTexture(textureName, 16, 16);
-            graphics.destroy();
-
-            // Create sprite
-            const sprite = this.scene.physics.add.sprite(x, y, textureName);
-            sprite.setPipeline('Light2D'); // Enable lighting
-            sprite.setDepth(10); // Draw above floor
-
-            // Amber accent light so pickups glow softly when within view
-            const light = this.scene.lights.addLight(x, y, 60, 0xff9933, 0.7);
-
-            // Create pickup object with state
             const pickup = {
                 id: i,
                 sprite: sprite,
-                light: light,
                 initialX: x,
                 initialY: y,
                 state: 'ACTIVE', // 'ACTIVE' | 'COLLECTED'
@@ -78,6 +60,50 @@ export class OilPickupManager {
         this.createCollisionGroup();
 
         console.log(`[OilPickupManager] Total pickups: ${this.pickups.length}`);
+    }
+
+    /**
+     * Draw the oil pickup — a tiny amber flask with a dark cap. Rendered with
+     * Light2D so the lantern reveals it on approach; intentionally no light
+     * source of its own so pickups don't telegraph their position in the dark.
+     */
+    _createSprite(x, y, id) {
+        const textureName = `oil-pickup-${id}`;
+        if (!this.scene.textures.exists(textureName)) {
+            const g = this.scene.make.graphics({ x: 0, y: 0, add: false });
+
+            // Bottle body (amber)
+            g.fillStyle(0xff8c1a, 1);
+            g.fillRoundedRect(3, 4, 10, 11, 2);
+            // Darker amber toward the bottom — gives liquid weight
+            g.fillStyle(0xc25a00, 1);
+            g.fillRoundedRect(3, 10, 10, 5, 2);
+            // Bottle outline
+            g.lineStyle(1, 0x140804, 1);
+            g.strokeRoundedRect(3, 4, 10, 11, 2);
+
+            // Left-edge highlight (specular reflection on glass)
+            g.fillStyle(0xffd57a, 1);
+            g.fillRect(4, 6, 1, 5);
+            g.fillStyle(0xffffff, 0.9);
+            g.fillRect(4, 6, 1, 2);
+
+            // Neck and cap
+            g.fillStyle(0x3a2818, 1);
+            g.fillRect(6, 3, 4, 1);
+            g.fillStyle(0x1f1a14, 1);
+            g.fillRect(6, 1, 4, 2);
+            g.fillStyle(0x6a6a6a, 1);
+            g.fillRect(7, 1, 1, 1);
+
+            g.generateTexture(textureName, 16, 16);
+            g.destroy();
+        }
+
+        const sprite = this.scene.physics.add.sprite(x, y, textureName);
+        sprite.setPipeline('Light2D');
+        sprite.setDepth(10);
+        return sprite;
     }
 
     /**
@@ -128,7 +154,6 @@ export class OilPickupManager {
         // Hide sprite (don't destroy it)
         pickup.sprite.setVisible(false);
         pickup.sprite.body.enable = false;
-        if (pickup.light) pickup.light.visible = false;
 
         // Visual feedback: amber sparkle burst at the pickup location
         if (this.scene.playCollectBurst) {
@@ -175,8 +200,6 @@ export class OilPickupManager {
         // Reset scale and alpha for pulse animation
         pickup.sprite.setScale(1);
         pickup.sprite.setAlpha(1);
-
-        if (pickup.light) pickup.light.visible = true;
     }
 
     /**
@@ -231,23 +254,11 @@ export class OilPickupManager {
         console.log(`[OilPickupManager] Spawning ${positions.length} server-provided pickups`);
 
         for (const pos of positions) {
-            const graphics = this.scene.make.graphics({ x: 0, y: 0, add: false });
-            graphics.fillStyle(0xff6600, 1);
-            graphics.fillCircle(8, 8, 6);
-            const textureName = `oil-pickup-${pos.id}`;
-            graphics.generateTexture(textureName, 16, 16);
-            graphics.destroy();
-
-            const sprite = this.scene.physics.add.sprite(pos.x, pos.y, textureName);
-            sprite.setPipeline('Light2D');
-            sprite.setDepth(10);
-
-            const light = this.scene.lights.addLight(pos.x, pos.y, 60, 0xff9933, 0.7);
+            const sprite = this._createSprite(pos.x, pos.y, pos.id);
 
             this.pickups.push({
                 id: pos.id,
                 sprite,
-                light,
                 initialX: pos.x,
                 initialY: pos.y,
                 state: 'ACTIVE',
@@ -274,7 +285,6 @@ export class OilPickupManager {
             pickup.state = 'COLLECTED';
             pickup.sprite.setVisible(false);
             pickup.sprite.body.enable = false;
-            if (pickup.light) pickup.light.visible = false;
             if (this.scene.playCollectBurst) {
                 this.scene.playCollectBurst(pickup.initialX, pickup.initialY, 0xffaa33);
             }
@@ -285,7 +295,6 @@ export class OilPickupManager {
             pickup.sprite.setPosition(pickup.initialX, pickup.initialY);
             pickup.sprite.setScale(1);
             pickup.sprite.setAlpha(1);
-            if (pickup.light) pickup.light.visible = true;
         }
     }
 }

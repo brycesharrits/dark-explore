@@ -19,9 +19,9 @@ export class BasePlayer extends Physics.Arcade.Sprite {
         scene.add.existing(this);
         scene.physics.add.existing(this);
 
-        // Enable lighting on player sprite
+        // Enable lighting on player sprite. No per-player tint: every player
+        // is a grey-cloaked figure with a warm lamp baked into the sprite art.
         this.setPipeline('Light2D');
-        this.setTint(BasePlayer.tintForPlayerId(playerId));
 
         // Facing direction drives which row of the spritesheet animates.
         // Persists across stops so the idle pose matches the last walking direction.

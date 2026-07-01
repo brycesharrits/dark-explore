@@ -28,9 +28,9 @@ export class CaveScene extends Scene {
         this.maxOil = 100; // Maximum oil capacity
         this.currentOil = 100; // Current oil level (starts full)
         this.oilDepletionRate = 6; // Oil units consumed per second - 2 is default
-        this.maxLightRadius = 290; // Maximum light radius in pixels (+21% from original 240)
+        this.maxLightRadius = 440; // Maximum light radius in pixels
         this.minLightRadius = 20; // Minimum light radius before game over (legacy - used for calculations)
-        this.minRadiusBeforeDim = 97; // Minimum radius before dimming starts (+21% from original 80)
+        this.minRadiusBeforeDim = 145; // Minimum radius before dimming starts
         this.maxLightIntensity = 1.5; // Maximum light intensity
 
         // Oil pickup properties (Phase 5: managed by OilPickupManager)
@@ -518,8 +518,9 @@ export class CaveScene extends Scene {
         // Set very dark ambient light (the cave darkness)
         this.lights.setAmbientColor(0x0a0a0a); // Very dark gray, almost black
 
-        // Create a point light at player position (starts off — flickers on when game begins)
-        this.lanternLight = this.lights.addLight(0, 0, 0, 0xffffff, 0);
+        // Create a point light at player position (starts off — flickers on when game begins).
+        // Warm yellow color sells the "oil lamp" feel; the whole visibility cone reads warm.
+        this.lanternLight = this.lights.addLight(0, 0, 0, 0xffd680, 0);
         this.lanternLit = false;
 
         console.log('[LANTERN] Lighting system enabled');
@@ -714,7 +715,7 @@ export class CaveScene extends Scene {
         } else {
             // --- Solo mode ---
             console.log('[CaveScene] Spawning bots...');
-            this.playerManager.spawnBots(99, 0.3);
+            this.playerManager.spawnBots(49, 0.3);
 
             const totalPlayers = this.playerManager.players.length;
             this.eliminationTracker.initialize(totalPlayers);

@@ -9,8 +9,8 @@ export class Preloader extends Phaser.Scene {
 
     preload() {
         this.load.spritesheet('player', 'assets/player-sheet.png', {
-            frameWidth: 32,
-            frameHeight: 32,
+            frameWidth: 48,
+            frameHeight: 48,
         });
     }
 
