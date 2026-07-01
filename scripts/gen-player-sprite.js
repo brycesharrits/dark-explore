@@ -224,6 +224,8 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const outPath = path.resolve(__dirname, '..', 'public', 'assets', 'player-sheet.png');
 
+fs.mkdirSync(path.dirname(outPath), { recursive: true });
+
 png.pack().pipe(fs.createWriteStream(outPath))
     .on('finish', () => console.log(`Wrote ${outPath} (${W}×${H}, ${ROWS} rows × ${COLS} frames)`))
     .on('error', (err) => { console.error(err); process.exit(1); });
